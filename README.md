@@ -36,7 +36,11 @@ dotnet run client --host server.example.com --port 1435 --verbose
 
 ### Use Proxy
 ```bash
+# HTTP requests
 curl --proxy localhost:1080 http://httpbin.org/ip
+
+# HTTPS requests (TLS/SSL)
+curl --proxy localhost:1080 https://httpbin.org/ip
 ```
 
 ## Options

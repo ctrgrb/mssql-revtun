@@ -74,8 +74,21 @@ namespace RevTun
                     while (_isRunning && _proxyListener != null)
                     {
                         try
-                        {
-                            var proxyClient = await _proxyListener.AcceptTcpClientAsync();
+                        {                            var proxyClient = await _proxyListener.AcceptTcpClientAsync();
+                              // Configure TCP socket for optimal TLS performance
+                            proxyClient.ReceiveTimeout = 30000; // 30 seconds
+                            proxyClient.SendTimeout = 30000; // 30 seconds
+                            proxyClient.NoDelay = true; // Critical: Disable Nagle algorithm for immediate TLS data
+                            
+                            // Configure socket options after connection
+                            var socket = proxyClient.Client;
+                            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true); // Critical for TLS
+                            
+                            // Optimize socket buffers for TLS (not too large to avoid delays)
+                            socket.ReceiveBufferSize = 16384; // 16KB - optimal for TLS records
+                            socket.SendBufferSize = 16384; // 16KB - optimal for TLS records
+                            
                             var connectionId = _nextConnectionId++;
                             var proxyConnection = new ProxyConnection(connectionId, proxyClient);
                             _proxyConnections[connectionId] = proxyConnection;
@@ -102,35 +115,28 @@ namespace RevTun
             {
                 Console.WriteLine($"Error starting proxy listener: {ex.Message}");
             }
-        }
-          private async Task HandleMssqlClientAsync(MssqlClientHandler clientHandler)
+        }        private async Task HandleMssqlClientAsync(MssqlClientHandler clientHandler)
         {
-            var buffer = new byte[4096];
             var client = clientHandler.TcpClient;
             var stream = clientHandler.Stream;
             
             try
-            {
-                while (client.Connected && _isRunning)
+            {                while (client.Connected && _isRunning)
                 {
-                    var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-                    if (bytesRead == 0)
+                    // Read complete TDS packet
+                    var packet = await ReceiveTdsPacket(stream);
+                    if (packet == null)
                         break;
-                          var receivedData = new byte[bytesRead];
-                    Array.Copy(buffer, receivedData, bytesRead);
                     
                     if (_options.Verbose)
                     {
-                        Console.WriteLine($"Received {bytesRead} bytes from MSSQL client");
-                        LogTdsPacket(receivedData, "RECEIVED");
+                        Console.WriteLine($"Received {packet.Length} bytes from MSSQL client");
+                        LogTdsPacket(packet, "RECEIVED");
                     }
                     
                     // Parse TDS header
-                    if (bytesRead >= 8)
-                    {
-                        var header = TdsProtocol.ParseTdsHeader(receivedData);
-                        await ProcessTdsMessage(clientHandler, header, receivedData);
-                    }
+                    var header = TdsProtocol.ParseTdsHeader(packet);
+                    await ProcessTdsMessage(clientHandler, header, packet);
                 }
             }
             catch (Exception ex)
@@ -153,25 +159,24 @@ namespace RevTun
                 client.Close();
                 Console.WriteLine($"MSSQL Client {clientHandler.ClientEndpoint} disconnected");
             }
-        }
-        
-        private async Task HandleProxyConnectionAsync(ProxyConnection proxyConnection)
+        }        private async Task HandleProxyConnectionAsync(ProxyConnection proxyConnection)
         {
             var buffer = new byte[4096];
             
             try
             {
-                // Read SOCKS5 handshake
+                // Read initial request
                 var bytesRead = await proxyConnection.ProxyStream.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead < 3)
                 {
-                    Console.WriteLine($"Invalid SOCKS5 handshake from connection {proxyConnection.Id}");
+                    Console.WriteLine($"Invalid request from connection {proxyConnection.Id}");
                     return;
                 }
                 
-                // Simple SOCKS5 handshake - respond with no authentication required
+                // Detect protocol type
                 if (buffer[0] == 0x05) // SOCKS5
                 {
+                    proxyConnection.IsSocks5 = true;
                     await proxyConnection.ProxyStream.WriteAsync(new byte[] { 0x05, 0x00 }, 0, 2);
                     
                     // Read connection request
@@ -202,22 +207,20 @@ namespace RevTun
                         proxyConnection.TargetHost = targetHost;
                         proxyConnection.TargetPort = targetPort;
                         
-                        Console.WriteLine($"Proxy connection {proxyConnection.Id} requesting: {targetHost}:{targetPort}");
+                        Console.WriteLine($"SOCKS5 connection {proxyConnection.Id} requesting: {targetHost}:{targetPort}");
                         
                         // Send connection request to client through MSSQL tunnel
                         var tunnelConnectPacket = TunnelProtocol.CreateTunnelConnectPacket(proxyConnection.Id, targetHost, targetPort);
                         await SendToMssqlClient(tunnelConnectPacket);
                         
-                        // Send SOCKS5 success response
-                        await proxyConnection.ProxyStream.WriteAsync(new byte[] { 0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 0, 10);
-                        
-                        // Start forwarding data
-                        await ForwardProxyData(proxyConnection);
+                        // Wait for connection acknowledgment - response will be sent in HandleTunnelConnectAck
+                        _ = Task.Run(() => ForwardProxyData(proxyConnection));
                     }
                 }
                 else
                 {
-                    // Handle direct HTTP proxy requests
+                    // Handle HTTP CONNECT requests
+                    proxyConnection.IsSocks5 = false;
                     var request = System.Text.Encoding.ASCII.GetString(buffer, 0, bytesRead);
                     if (request.StartsWith("CONNECT "))
                     {
@@ -236,13 +239,8 @@ namespace RevTun
                                 var tunnelConnectPacket = TunnelProtocol.CreateTunnelConnectPacket(proxyConnection.Id, proxyConnection.TargetHost, proxyConnection.TargetPort);
                                 await SendToMssqlClient(tunnelConnectPacket);
                                 
-                                // Send HTTP 200 Connection established
-                                var response = "HTTP/1.1 200 Connection established\r\n\r\n";
-                                var responseBytes = System.Text.Encoding.ASCII.GetBytes(response);
-                                await proxyConnection.ProxyStream.WriteAsync(responseBytes, 0, responseBytes.Length);
-                                
-                                // Start forwarding data
-                                await ForwardProxyData(proxyConnection);
+                                // Wait for connection acknowledgment - response will be sent in HandleTunnelConnectAck
+                                _ = Task.Run(() => ForwardProxyData(proxyConnection));
                             }
                         }
                     }
@@ -251,38 +249,116 @@ namespace RevTun
             catch (Exception ex)
             {
                 Console.WriteLine($"Error handling proxy connection {proxyConnection.Id}: {ex.Message}");
-            }
-            finally
-            {
                 _proxyConnections.TryRemove(proxyConnection.Id, out _);
                 proxyConnection.ProxyClient.Close();
-                Console.WriteLine($"Proxy connection {proxyConnection.Id} closed");
             }
-        }
-        
-        private async Task ForwardProxyData(ProxyConnection proxyConnection)
+        }        private async Task ForwardProxyData(ProxyConnection proxyConnection)
         {
-            var buffer = new byte[4096];
+            var buffer = new byte[8192]; // Standard 8KB buffer for TCP streams
             
             try
             {
+                // Configure proxy stream timeouts
+                proxyConnection.ProxyStream.ReadTimeout = 30000; // 30 seconds
+                proxyConnection.ProxyStream.WriteTimeout = 30000; // 30 seconds
+                
+                // Wait for connection to be established
+                var timeout = DateTime.Now.AddSeconds(30);
+                while (!proxyConnection.IsActive && DateTime.Now < timeout)
+                {
+                    await Task.Delay(100);
+                }
+                
+                if (!proxyConnection.IsActive)
+                {
+                    Console.WriteLine($"Timeout waiting for tunnel connection {proxyConnection.Id} to be established");
+                    return;
+                }
+                
+                // Now start forwarding data
                 while (proxyConnection.ProxyClient.Connected && proxyConnection.IsActive)
                 {
                     var bytesRead = await proxyConnection.ProxyStream.ReadAsync(buffer, 0, buffer.Length);
                     if (bytesRead == 0)
+                    {
+                        if (_options.Verbose)
+                        {
+                            Console.WriteLine($"Proxy connection {proxyConnection.Id} closed by client");
+                        }
                         break;
+                    }
                         
                     var data = new byte[bytesRead];
                     Array.Copy(buffer, data, bytesRead);
+                      // Send data through MSSQL tunnel immediately
+                    // Split large data into smaller chunks if necessary to avoid TDS packet size limits
+                    const int maxChunkSize = 32000; // Leave room for tunnel protocol overhead
                     
-                    // Send data through MSSQL tunnel
-                    var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(proxyConnection.Id, data);
-                    await SendToMssqlClient(tunnelDataPacket);
+                    if (data.Length <= maxChunkSize)
+                    {
+                        // Send as single packet
+                        var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(proxyConnection.Id, data);
+                        await SendToMssqlClient(tunnelDataPacket);
+                    }
+                    else
+                    {
+                        // Split into multiple packets
+                        for (int offset = 0; offset < data.Length; offset += maxChunkSize)
+                        {
+                            var chunkSize = Math.Min(maxChunkSize, data.Length - offset);
+                            var chunk = new byte[chunkSize];
+                            Array.Copy(data, offset, chunk, 0, chunkSize);
+                            
+                            var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(proxyConnection.Id, chunk);
+                            await SendToMssqlClient(tunnelDataPacket);
+                            
+                            if (_options.Verbose)
+                            {
+                                Console.WriteLine($"Sent chunk {offset/maxChunkSize + 1}: {chunk.Length} bytes from proxy {proxyConnection.Id}");
+                            }
+                        }
+                    }
+                    
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine($"Forwarded {bytesRead} bytes from proxy to tunnel {proxyConnection.Id}");
+                    }}
+            }
+            catch (System.IO.IOException ioEx) when (ioEx.InnerException is SocketException sockEx)
+            {
+                // Handle specific socket errors
+                if (sockEx.SocketErrorCode == SocketError.ConnectionAborted || 
+                    sockEx.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    Console.WriteLine($"Proxy connection {proxyConnection.Id} reset by client");
                 }
+                else
+                {
+                    Console.WriteLine($"Socket error for proxy connection {proxyConnection.Id}: {sockEx.SocketErrorCode} - {sockEx.Message}");
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                Console.WriteLine($"Proxy connection {proxyConnection.Id} was disposed");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error forwarding proxy data for connection {proxyConnection.Id}: {ex.Message}");
+            }
+            finally
+            {
+                // Send tunnel disconnect
+                var disconnectPacket = TunnelProtocol.CreateTunnelDisconnectPacket(proxyConnection.Id);
+                await SendToMssqlClient(disconnectPacket);
+                
+                // Clean up
+                _proxyConnections.TryRemove(proxyConnection.Id, out _);
+                proxyConnection.ProxyClient.Close();
+                
+                if (_options.Verbose)
+                {
+                    Console.WriteLine($"Proxy connection {proxyConnection.Id} closed and cleaned up");
+                }
             }
         }
         
@@ -340,36 +416,109 @@ namespace RevTun
                     Console.WriteLine($"Unhandled TDS message type: 0x{header.Type:X2}");
                     break;
             }
-        }
-          private Task HandleTunnelConnectAck(byte[] data)
+        }        private async Task HandleTunnelConnectAck(byte[] data)
         {
-            // This would be handled by the client, not the server
-            Console.WriteLine("Received tunnel connect ack (unexpected on server)");
-            return Task.CompletedTask;
-        }
-        
-        private async Task HandleTunnelData(byte[] data)
+            try
+            {
+                var payload = new byte[data.Length - 8];
+                Array.Copy(data, 8, payload, 0, payload.Length);
+                var connectionId = BitConverter.ToUInt32(payload, 0);
+                var success = payload[4] == 1;
+                
+                if (_proxyConnections.TryGetValue(connectionId, out var proxyConnection))
+                {
+                    if (success)
+                    {
+                        // Mark connection as active
+                        proxyConnection.IsActive = true;
+                        
+                        // Send appropriate response based on the detected protocol
+                        if (!proxyConnection.ResponseSent)
+                        {
+                            if (proxyConnection.IsSocks5)
+                            {
+                                // SOCKS5 success response
+                                await proxyConnection.ProxyStream.WriteAsync(new byte[] { 0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 0, 10);
+                                if (_options.Verbose)
+                                {
+                                    Console.WriteLine($"Sent SOCKS5 success response for {proxyConnection.TargetHost}:{proxyConnection.TargetPort}");
+                                }
+                            }
+                            else
+                            {
+                                // HTTP CONNECT response
+                                var response = "HTTP/1.1 200 Connection established\r\n\r\n";
+                                var responseBytes = System.Text.Encoding.ASCII.GetBytes(response);
+                                await proxyConnection.ProxyStream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                                if (_options.Verbose)
+                                {
+                                    Console.WriteLine($"Sent HTTP 200 Connection established for {proxyConnection.TargetHost}:{proxyConnection.TargetPort}");
+                                }
+                            }
+                            proxyConnection.ResponseSent = true;
+                        }
+                        
+                        if (_options.Verbose)
+                        {
+                            Console.WriteLine($"Tunnel connection {connectionId} established successfully to {proxyConnection.TargetHost}:{proxyConnection.TargetPort}");
+                        }
+                    }
+                    else
+                    {
+                        // Connection failed - send error responses
+                        if (proxyConnection.IsSocks5)
+                        {
+                            // SOCKS5 error response (connection refused)
+                            await proxyConnection.ProxyStream.WriteAsync(new byte[] { 0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 0, 10);
+                        }
+                        else
+                        {
+                            // HTTP error response
+                            var response = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
+                            var responseBytes = System.Text.Encoding.ASCII.GetBytes(response);
+                            await proxyConnection.ProxyStream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                        }
+                        
+                        Console.WriteLine($"Tunnel connection {connectionId} failed to {proxyConnection.TargetHost}:{proxyConnection.TargetPort}");
+                        
+                        // Remove failed connection
+                        _proxyConnections.TryRemove(connectionId, out _);
+                        proxyConnection.ProxyClient.Close();
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"Received tunnel connect ack for unknown connection {connectionId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error handling tunnel connect ack: {ex.Message}");
+            }
+        }        private async Task HandleTunnelData(byte[] data)
         {
             try
             {
                 var (connectionId, tunnelData) = TunnelProtocol.ParseTunnelDataPacket(data);
                 
-                if (_proxyConnections.TryGetValue(connectionId, out var proxyConnection))
-                {
+                if (_proxyConnections.TryGetValue(connectionId, out var proxyConnection) && proxyConnection.ProxyClient.Connected)
+                {                    // Write data immediately - don't buffer or parse TLS records
+                    // TCP handles fragmentation and reassembly correctly
                     await proxyConnection.ProxyStream.WriteAsync(tunnelData, 0, tunnelData.Length);
+                    // Don't flush here - let TCP handle it optimally
+                    
                     Console.WriteLine($"Forwarded {tunnelData.Length} bytes to proxy connection {connectionId}");
                 }
                 else
                 {
-                    Console.WriteLine($"Tunnel data received for unknown connection {connectionId}");
+                    Console.WriteLine($"Tunnel data received for unknown/closed connection {connectionId}");
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error handling tunnel data: {ex.Message}");
             }
-        }
-          private Task HandleTunnelDisconnect(byte[] data)
+        }        private Task HandleTunnelDisconnect(byte[] data)
         {
             try
             {
@@ -381,6 +530,7 @@ namespace RevTun
                 {
                     proxyConnection.IsActive = false;
                     proxyConnection.ProxyClient.Close();
+                    
                     if (_options.Verbose)
                     {
                         Console.WriteLine($"Tunnel connection {connectionId} disconnected by client");
@@ -523,6 +673,53 @@ namespace RevTun
             _connectedClients.Clear();
             
             Console.WriteLine("Server stopped");
+        }
+        
+        private async Task<byte[]?> ReceiveTdsPacket(NetworkStream stream)
+        {
+            try
+            {
+                // Read TDS header (8 bytes) - ensure we get all 8 bytes
+                var headerBuffer = new byte[8];
+                var totalHeaderRead = 0;
+                while (totalHeaderRead < 8)
+                {
+                    var bytesRead = await stream.ReadAsync(headerBuffer, totalHeaderRead, 8 - totalHeaderRead);
+                    if (bytesRead == 0)
+                        return null; // Connection closed
+                    totalHeaderRead += bytesRead;
+                }
+                
+                var header = TdsProtocol.ParseTdsHeader(headerBuffer);
+                var totalLength = header.Length;
+                var remainingBytes = totalLength - 8;
+                
+                var fullPacket = new byte[totalLength];
+                Array.Copy(headerBuffer, 0, fullPacket, 0, 8);
+                
+                // Read remaining bytes - ensure we get ALL remaining bytes
+                if (remainingBytes > 0)
+                {
+                    var totalDataRead = 0;
+                    while (totalDataRead < remainingBytes)
+                    {
+                        var bytesRead = await stream.ReadAsync(fullPacket, 8 + totalDataRead, remainingBytes - totalDataRead);
+                        if (bytesRead == 0)
+                        {
+                            Console.WriteLine("Warning: Connection closed while reading packet data");
+                            return null;
+                        }
+                        totalDataRead += bytesRead;
+                    }
+                }
+                
+                return fullPacket;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error receiving TDS packet: {ex.Message}");
+                return null;
+            }
         }
     }
 }

@@ -1,8 +1,7 @@
 using System.Net.Sockets;
 
 namespace RevTun
-{
-    public class ProxyConnection
+{    public class ProxyConnection
     {
         public uint Id { get; set; }
         public TcpClient ProxyClient { get; set; }
@@ -11,6 +10,8 @@ namespace RevTun
         public int TargetPort { get; set; }
         public DateTime CreatedAt { get; set; }
         public bool IsActive { get; set; }
+        public bool ResponseSent { get; set; }
+        public bool IsSocks5 { get; set; }
         
         public ProxyConnection(uint id, TcpClient client)
         {
@@ -18,7 +19,9 @@ namespace RevTun
             ProxyClient = client;
             ProxyStream = client.GetStream();
             CreatedAt = DateTime.Now;
-            IsActive = true;
+            IsActive = false; // Will be set to true when tunnel is established
+            ResponseSent = false;
+            IsSocks5 = false;
             TargetHost = "";
             TargetPort = 0;
         }
@@ -75,8 +78,7 @@ namespace RevTun
             
             return packet;
         }
-        
-        public static byte[] CreateTunnelDataPacket(uint connectionId, byte[] data)
+          public static byte[] CreateTunnelDataPacket(uint connectionId, byte[] data)
         {
             var payload = new List<byte>();
             
@@ -88,6 +90,13 @@ namespace RevTun
             payload.AddRange(data);
             
             var totalLength = (ushort)(8 + payload.Count);
+            
+            // Check if packet would be too large for TDS
+            if (totalLength > 32768) // 32KB limit for TDS packets
+            {
+                throw new ArgumentException($"Tunnel data packet too large: {totalLength} bytes (max 32KB)");
+            }
+            
             var header = TdsProtocol.CreateTdsHeader(TUNNEL_DATA, TdsProtocol.STATUS_EOM, totalLength, 0, 1, 0);
             
             var packet = new byte[totalLength];
@@ -152,17 +161,21 @@ namespace RevTun
             
             return (connectionId, host, port);
         }
-        
-        public static (uint connectionId, byte[] data) ParseTunnelDataPacket(byte[] packet)
+          public static (uint connectionId, byte[] data) ParseTunnelDataPacket(byte[] packet)
         {
-            if (packet.Length < 8)
-                throw new ArgumentException("Invalid tunnel data packet");
+            if (packet.Length < 16) // 8 (header) + 4 (connectionId) + 4 (dataLength)
+                throw new ArgumentException("Invalid tunnel data packet - too short");
                 
             var payload = new byte[packet.Length - 8];
             Array.Copy(packet, 8, payload, 0, payload.Length);
             
             var connectionId = BitConverter.ToUInt32(payload, 0);
             var dataLength = BitConverter.ToInt32(payload, 4);
+            
+            // Validate data length to prevent buffer overflows
+            if (dataLength < 0 || dataLength > payload.Length - 8)
+                throw new ArgumentException($"Invalid data length in tunnel packet: {dataLength}, available: {payload.Length - 8}");
+            
             var data = new byte[dataLength];
             Array.Copy(payload, 8, data, 0, dataLength);
             

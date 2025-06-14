@@ -111,9 +111,7 @@ namespace RevTun
             {
                 Console.WriteLine($"Error handling tunnel messages: {ex.Message}");
             }
-        }
-        
-        private async Task HandleTunnelConnect(byte[] data)
+        }        private async Task HandleTunnelConnect(byte[] data)
         {
             try
             {
@@ -123,10 +121,24 @@ namespace RevTun
                 var targetClient = new TcpClient();
                 bool connected = false;
                 string errorMessage = "";
-                
-                try
+                  try
                 {
+                    // Configure TCP socket for better TLS performance
+                    targetClient.ReceiveTimeout = 30000; // 30 seconds
+                    targetClient.SendTimeout = 30000; // 30 seconds
+                    targetClient.NoDelay = true; // Critical: Disable Nagle algorithm for immediate TLS data
+                    
                     await targetClient.ConnectAsync(host, port);
+                    
+                    // Configure socket options after connection
+                    var socket = targetClient.Client;
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                    socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true); // Critical for TLS
+                    
+                    // Optimize socket buffers for TLS (not too large to avoid delays)
+                    socket.ReceiveBufferSize = 16384; // 16KB - optimal for TLS records
+                    socket.SendBufferSize = 16384; // 16KB - optimal for TLS records
+                    
                     connected = true;
                     _tunnelConnections[connectionId] = targetClient;
                     
@@ -154,9 +166,7 @@ namespace RevTun
             {
                 Console.WriteLine($"Error handling tunnel connect: {ex.Message}");
             }
-        }
-        
-        private async Task HandleTunnelData(byte[] data)
+        }        private async Task HandleTunnelData(byte[] data)
         {
             try
             {
@@ -165,7 +175,11 @@ namespace RevTun
                 if (_tunnelConnections.TryGetValue(connectionId, out var targetClient) && targetClient.Connected)
                 {
                     var targetStream = targetClient.GetStream();
+                      // Write data immediately - don't buffer or parse TLS records
+                    // TCP handles fragmentation and reassembly correctly
                     await targetStream.WriteAsync(tunnelData, 0, tunnelData.Length);
+                    // Don't flush here - let TCP handle it optimally
+                    
                     Console.WriteLine($"Forwarded {tunnelData.Length} bytes to target for connection {connectionId}");
                 }
                 else
@@ -177,8 +191,7 @@ namespace RevTun
             {
                 Console.WriteLine($"Error handling tunnel data: {ex.Message}");
             }
-        }
-          private Task HandleTunnelDisconnect(byte[] data)
+        }        private Task HandleTunnelDisconnect(byte[] data)
         {
             try
             {
@@ -189,6 +202,7 @@ namespace RevTun
                 if (_tunnelConnections.TryRemove(connectionId, out var targetClient))
                 {
                     targetClient.Close();
+                    
                     if (_options.Verbose)
                     {
                         Console.WriteLine($"Tunnel connection {connectionId} disconnected");
@@ -200,32 +214,96 @@ namespace RevTun
                 Console.WriteLine($"Error handling tunnel disconnect: {ex.Message}");
             }
             return Task.CompletedTask;
-        }
-        
-        private async Task ForwardTunnelData(uint connectionId, TcpClient targetClient)
+        }        private async Task ForwardTunnelData(uint connectionId, TcpClient targetClient)
         {
-            var buffer = new byte[4096];
+            var buffer = new byte[8192]; // Standard 8KB buffer for TCP streams
             var targetStream = targetClient.GetStream();
             
             try
             {
+                // Set stream timeouts
+                targetStream.ReadTimeout = 30000; // 30 seconds
+                targetStream.WriteTimeout = 30000; // 30 seconds
+                
                 while (targetClient.Connected && _isConnected)
                 {
                     var bytesRead = await targetStream.ReadAsync(buffer, 0, buffer.Length);
                     if (bytesRead == 0)
+                    {
+                        // Connection closed by remote
+                        if (_options.Verbose)
+                        {
+                            Console.WriteLine($"Target connection {connectionId} closed by remote");
+                        }
                         break;
+                    }
                         
                     var data = new byte[bytesRead];
                     Array.Copy(buffer, data, bytesRead);
                     
-                    // Send data back to server through MSSQL tunnel
-                    var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(connectionId, data);
-                    if (_stream != null)
+                    // Send data back to server through MSSQL tunnel immediately
+                    // Split large data into smaller chunks if necessary to avoid TDS packet size limits
+                    const int maxChunkSize = 32000; // Leave room for tunnel protocol overhead
+                    
+                    if (data.Length <= maxChunkSize)
                     {
-                        await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
-                        Console.WriteLine($"Sent {data.Length} bytes back through tunnel {connectionId}");
+                        // Send as single packet
+                        var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(connectionId, data);
+                        if (_stream != null)
+                        {
+                            await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
+                            break;
+                        }
                     }
+                    else
+                    {
+                        // Split into multiple packets
+                        for (int offset = 0; offset < data.Length; offset += maxChunkSize)
+                        {
+                            var chunkSize = Math.Min(maxChunkSize, data.Length - offset);
+                            var chunk = new byte[chunkSize];
+                            Array.Copy(data, offset, chunk, 0, chunkSize);
+                            
+                            var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(connectionId, chunk);
+                            if (_stream != null)
+                            {
+                                await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
+                                if (_options.Verbose)
+                                {
+                                    Console.WriteLine($"Sent chunk {offset/maxChunkSize + 1}: {chunk.Length} bytes for tunnel {connectionId}");
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
+                                break;
+                            }
+                        }
+                    }
+                    
+                    Console.WriteLine($"Sent {data.Length} bytes back through tunnel {connectionId}");
                 }
+            }
+            catch (System.IO.IOException ioEx) when (ioEx.InnerException is SocketException sockEx)
+            {
+                // Handle specific socket errors
+                if (sockEx.SocketErrorCode == SocketError.ConnectionAborted || 
+                    sockEx.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    Console.WriteLine($"Target connection {connectionId} reset by peer");
+                }
+                else
+                {
+                    Console.WriteLine($"Socket error for connection {connectionId}: {sockEx.SocketErrorCode} - {sockEx.Message}");
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                Console.WriteLine($"Connection {connectionId} was disposed");
             }
             catch (Exception ex)
             {
@@ -233,21 +311,29 @@ namespace RevTun
             }
             finally
             {
-                // Notify server of disconnection
-                var disconnectPacket = TunnelProtocol.CreateTunnelDisconnectPacket(connectionId);
-                if (_stream != null)
+                // Clean up connection
+                if (_tunnelConnections.TryRemove(connectionId, out var removedClient))
                 {
                     try
                     {
-                        await _stream.WriteAsync(disconnectPacket, 0, disconnectPacket.Length);
+                        removedClient.Close();
                     }
                     catch { }
                 }
                 
-                _tunnelConnections.TryRemove(connectionId, out _);
-                targetClient.Close();
+                // Send tunnel disconnect notification
+                if (_stream != null)
+                {
+                    try
+                    {
+                        var disconnectPacket = TunnelProtocol.CreateTunnelDisconnectPacket(connectionId);
+                        await _stream.WriteAsync(disconnectPacket, 0, disconnectPacket.Length);
+                        Console.WriteLine($"Sent disconnect for tunnel {connectionId}");
+                    }
+                    catch { }
+                }
             }
-        }        private async Task PerformHandshake()
+        }private async Task PerformHandshake()
         {
             if (_stream == null) return;
             
@@ -370,18 +456,22 @@ namespace RevTun
             {
                 Console.WriteLine($"Error executing SQL: {ex.Message}");
             }
-        }
-          private async Task<byte[]?> ReceiveTdsPacket()
+        }        private async Task<byte[]?> ReceiveTdsPacket()
         {
             try
             {
                 if (_stream == null) return null;
                 
+                // Read TDS header (8 bytes) - ensure we get all 8 bytes
                 var headerBuffer = new byte[8];
-                var bytesRead = await _stream.ReadAsync(headerBuffer, 0, 8);
-                
-                if (bytesRead < 8)
-                    return null;
+                var totalHeaderRead = 0;
+                while (totalHeaderRead < 8)
+                {
+                    var bytesRead = await _stream.ReadAsync(headerBuffer, totalHeaderRead, 8 - totalHeaderRead);
+                    if (bytesRead == 0)
+                        return null; // Connection closed
+                    totalHeaderRead += bytesRead;
+                }
                 
                 var header = TdsProtocol.ParseTdsHeader(headerBuffer);
                 var totalLength = header.Length;
@@ -390,12 +480,19 @@ namespace RevTun
                 var fullPacket = new byte[totalLength];
                 Array.Copy(headerBuffer, 0, fullPacket, 0, 8);
                 
+                // Read remaining bytes - ensure we get ALL remaining bytes
                 if (remainingBytes > 0)
                 {
-                    bytesRead = await _stream.ReadAsync(fullPacket, 8, remainingBytes);
-                    if (bytesRead < remainingBytes)
+                    var totalDataRead = 0;
+                    while (totalDataRead < remainingBytes)
                     {
-                        Console.WriteLine("Warning: Incomplete packet received");
+                        var bytesRead = await _stream.ReadAsync(fullPacket, 8 + totalDataRead, remainingBytes - totalDataRead);
+                        if (bytesRead == 0)
+                        {
+                            Console.WriteLine("Warning: Connection closed while reading packet data");
+                            return null;
+                        }
+                        totalDataRead += bytesRead;
                     }
                 }
                 
