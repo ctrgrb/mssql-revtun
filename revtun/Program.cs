@@ -67,8 +67,7 @@ namespace RevTun
             Console.WriteLine();
             Console.WriteLine("Use 'dotnet run help' for detailed options.");
         }
-        
-        static void PrintHelp()
+          static void PrintHelp()
         {
             Console.WriteLine("RevTun - MSSQL Reverse Tunnel");
             Console.WriteLine("==============================");
@@ -78,6 +77,8 @@ namespace RevTun
             Console.WriteLine("  --proxy-port <port>        Proxy listener port (default: 1080)");
             Console.WriteLine("  --bind <address>           Bind address (default: 0.0.0.0)");
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
+            Console.WriteLine("  --require-encryption       Require TLS encryption for all connections");
+            Console.WriteLine("  --no-encryption            Disable TLS encryption support");
             Console.WriteLine();
             Console.WriteLine("CLIENT OPTIONS:");
             Console.WriteLine("  --host, -h <hostname>      Server hostname (default: localhost)");
@@ -87,6 +88,8 @@ namespace RevTun
             Console.WriteLine("  --database, -d <db>        Database name (default: master)");
             Console.WriteLine("  --auto-exit                Exit after connection test");
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
+            Console.WriteLine("  --encrypt                  Request TLS encryption");
+            Console.WriteLine("  --require-encryption       Require TLS encryption (fail if not supported)");
             Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
             Console.WriteLine("  # Start server on custom port");
@@ -98,10 +101,15 @@ namespace RevTun
             Console.WriteLine("  # Server with verbose logging");
             Console.WriteLine("  dotnet run server --verbose");
             Console.WriteLine();
+            Console.WriteLine("  # Client with TLS encryption");
+            Console.WriteLine("  dotnet run client --encrypt --host server.example.com");
+            Console.WriteLine();
+            Console.WriteLine("  # Server requiring encryption");
+            Console.WriteLine("  dotnet run server --require-encryption");
+            Console.WriteLine();
             Console.WriteLine("  # Client with custom credentials");
             Console.WriteLine("  dotnet run client --username admin --password secret --database mydb");
-        }        
-        static async Task StartServer(string[] args)
+        }        static async Task StartServer(string[] args)
         {
             var options = ParseServerOptions(args);
             
@@ -110,6 +118,8 @@ namespace RevTun
             Console.WriteLine($"Proxy Port: {options.ProxyPort}");
             Console.WriteLine($"Bind Address: {options.BindAddress}");
             Console.WriteLine($"Verbose: {options.Verbose}");
+            Console.WriteLine($"Encryption Support: {(options.SupportEncryption ? "Enabled" : "Disabled")}");
+            Console.WriteLine($"Require Encryption: {(options.RequireEncryption ? "Yes" : "No")}");
             Console.WriteLine("Note: This server simulates MSSQL TDS protocol behavior");
             Console.WriteLine("Press Ctrl+C to stop the server\n");
             
@@ -126,8 +136,7 @@ namespace RevTun
             
             await server.StartAsync();
         }
-        
-        static async Task StartClient(string[] args)
+          static async Task StartClient(string[] args)
         {
             var options = ParseClientOptions(args);
             
@@ -137,6 +146,8 @@ namespace RevTun
             Console.WriteLine($"Database: {options.Database}");
             Console.WriteLine($"Auto Exit: {options.AutoExit}");
             Console.WriteLine($"Verbose: {options.Verbose}");
+            Console.WriteLine($"Request Encryption: {(options.RequestEncryption ? "Yes" : "No")}");
+            Console.WriteLine($"Require Encryption: {(options.RequireEncryption ? "Yes" : "No")}");
             Console.WriteLine("Note: This client will establish a reverse tunnel\n");
             
             var client = new MssqlClient(options);
@@ -148,8 +159,7 @@ namespace RevTun
                 Console.ReadKey();
             }
         }
-        
-        static ServerOptions ParseServerOptions(string[] args)
+          static ServerOptions ParseServerOptions(string[] args)
         {
             var options = new ServerOptions();
             
@@ -183,13 +193,20 @@ namespace RevTun
                     case "-v":
                         options.Verbose = true;
                         break;
+                    case "--require-encryption":
+                        options.RequireEncryption = true;
+                        options.SupportEncryption = true;
+                        break;
+                    case "--no-encryption":
+                        options.SupportEncryption = false;
+                        options.RequireEncryption = false;
+                        break;
                 }
             }
             
             return options;
         }
-        
-        static ClientOptions ParseClientOptions(string[] args)
+          static ClientOptions ParseClientOptions(string[] args)
         {
             var options = new ClientOptions();
             
@@ -243,22 +260,29 @@ namespace RevTun
                     case "-v":
                         options.Verbose = true;
                         break;
+                    case "--encrypt":
+                        options.RequestEncryption = true;
+                        break;
+                    case "--require-encryption":
+                        options.RequireEncryption = true;
+                        options.RequestEncryption = true;
+                        break;
                 }
             }
             
             return options;
         }
     }
-    
-    public class ServerOptions
+      public class ServerOptions
     {
         public int Port { get; set; } = 1433;
         public int ProxyPort { get; set; } = 1080;
         public string BindAddress { get; set; } = "0.0.0.0";
         public bool Verbose { get; set; } = false;
+        public bool RequireEncryption { get; set; } = false;
+        public bool SupportEncryption { get; set; } = true;
     }
-    
-    public class ClientOptions
+      public class ClientOptions
     {
         public string Host { get; set; } = "localhost";
         public int Port { get; set; } = 1433;
@@ -267,5 +291,7 @@ namespace RevTun
         public string Database { get; set; } = "master";
         public bool AutoExit { get; set; } = false;
         public bool Verbose { get; set; } = false;
+        public bool RequestEncryption { get; set; } = false;
+        public bool RequireEncryption { get; set; } = false;
     }
 }

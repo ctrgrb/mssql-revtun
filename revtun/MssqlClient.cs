@@ -1,4 +1,6 @@
 using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Collections.Concurrent;
 
@@ -6,7 +8,7 @@ namespace RevTun
 {    public class MssqlClient
     {
         private TcpClient? _client;
-        private NetworkStream? _stream;
+        private Stream? _stream;
         private readonly ClientOptions _options;
         private readonly ConcurrentDictionary<uint, TcpClient> _tunnelConnections = new();
         private bool _isConnected = false;
@@ -333,16 +335,21 @@ namespace RevTun
                     catch { }
                 }
             }
-        }private async Task PerformHandshake()
+        }        private async Task PerformHandshake()
         {
             if (_stream == null) return;
             
-            // Step 1: Send Pre-Login
+            // Step 1: Send Pre-Login with encryption settings
             if (_options.Verbose)
             {
                 Console.WriteLine("Sending Pre-Login packet...");
             }
-            var preLoginPacket = TdsProtocol.CreatePreLoginPacket();
+            
+            var encryptionOption = _options.RequireEncryption ? TdsProtocol.ENCRYPT_REQ : 
+                                  _options.RequestEncryption ? TdsProtocol.ENCRYPT_ON : 
+                                  TdsProtocol.ENCRYPT_OFF;
+            
+            var preLoginPacket = TdsProtocol.CreatePreLoginPacket(encryptionOption);
             await _stream.WriteAsync(preLoginPacket, 0, preLoginPacket.Length);
             if (_options.Verbose)
             {
@@ -351,12 +358,77 @@ namespace RevTun
             
             // Receive Pre-Login response
             var response = await ReceiveTdsPacket();
-            if (response != null)
+            if (response == null)
+            {
+                throw new InvalidOperationException("No response received to Pre-Login packet");
+            }
+            
+            if (_options.Verbose)
+            {
+                Console.WriteLine("Received Pre-Login response");
+                LogTdsPacket(response, "RECEIVED");
+            }
+            
+            // Parse the server's encryption response
+            var serverEncryption = TdsProtocol.ParsePreLoginEncryption(response);
+            var useEncryption = false;
+            
+            switch (serverEncryption)
+            {
+                case TdsProtocol.ENCRYPT_ON:
+                case TdsProtocol.ENCRYPT_REQ:
+                    useEncryption = true;
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine("Server supports/requires encryption - enabling TLS");
+                    }
+                    break;
+                case TdsProtocol.ENCRYPT_OFF:
+                    if (_options.RequireEncryption)
+                    {
+                        throw new InvalidOperationException("Server does not support encryption but client requires it");
+                    }
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine("Server does not support encryption - using plaintext");
+                    }
+                    break;
+                default:
+                    if (_options.RequireEncryption)
+                    {
+                        throw new InvalidOperationException("Server encryption response unclear but client requires encryption");
+                    }
+                    break;
+            }
+            
+            // Step 1.5: Setup TLS if negotiated
+            if (useEncryption)
             {
                 if (_options.Verbose)
                 {
-                    Console.WriteLine("Received Pre-Login response");
-                    LogTdsPacket(response, "RECEIVED");
+                    Console.WriteLine("Starting TLS handshake...");
+                }
+                
+                var sslStream = new SslStream(_stream, false, ValidateServerCertificate);
+                try
+                {
+                    await sslStream.AuthenticateAsClientAsync(_options.Host);
+                    _stream = sslStream;
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine("TLS handshake completed successfully");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (_options.RequireEncryption)
+                    {
+                        throw new InvalidOperationException($"TLS handshake failed: {ex.Message}");
+                    }
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine($"TLS handshake failed, continuing with plaintext: {ex.Message}");
+                    }
                 }
             }
             
@@ -381,7 +453,7 @@ namespace RevTun
                     Console.WriteLine("Received Login response");
                     LogTdsPacket(response, "RECEIVED");
                 }
-                Console.WriteLine("Login successful! Tunnel is now active.");
+                Console.WriteLine($"Login successful! Tunnel is now active. {(useEncryption ? "(Encrypted)" : "(Plaintext)")}");
             }
         }
           private async Task StartInteractiveSession()
@@ -610,6 +682,17 @@ namespace RevTun
             }
             
             return null;
+        }
+        
+        private bool ValidateServerCertificate(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
+        {
+            // For tunnel purposes, we accept any certificate
+            // In production, you might want to implement proper certificate validation
+            if (_options.Verbose && sslPolicyErrors != SslPolicyErrors.None)
+            {
+                Console.WriteLine($"TLS Certificate validation warnings: {sslPolicyErrors}");
+            }
+            return true;
         }
     }
 }

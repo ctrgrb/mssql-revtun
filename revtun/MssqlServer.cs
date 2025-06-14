@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Collections.Concurrent;
 
@@ -40,11 +42,10 @@ namespace RevTun
                     
                     var clientHandler = new MssqlClientHandler(tcpClient);
                     _connectedClients[clientEndpoint] = clientHandler;
-                    
-                    // Start proxy listener when first client connects
+                      // Start proxy listener when first client connects
                     if (_proxyListener == null && _connectedClients.Count == 1)
                     {
-                        await StartProxyListener();
+                        StartProxyListener();
                     }
                     
                     // Handle client in a separate task
@@ -58,8 +59,7 @@ namespace RevTun
                     }
                 }
             }
-        }
-          private async Task StartProxyListener()
+        }        private Task StartProxyListener()
         {
             try
             {
@@ -114,7 +114,9 @@ namespace RevTun
             {
                 Console.WriteLine($"Error starting proxy listener: {ex.Message}");
             }
-        }        private async Task HandleMssqlClientAsync(MssqlClientHandler clientHandler)
+            
+            return Task.CompletedTask;
+        }private async Task HandleMssqlClientAsync(MssqlClientHandler clientHandler)
         {
             var client = clientHandler.TcpClient;
             var stream = clientHandler.Stream;
@@ -376,13 +378,12 @@ namespace RevTun
             {
                 Console.WriteLine("No authenticated MSSQL client available for tunneling");
             }
-        }
-          private async Task ProcessTdsMessage(MssqlClientHandler clientHandler, TdsHeader header, byte[] data)
+        }        private async Task ProcessTdsMessage(MssqlClientHandler clientHandler, TdsHeader header, byte[] data)
         {
             switch (header.Type)
             {
                 case TdsProtocol.PRE_LOGIN:
-                    await HandlePreLogin(clientHandler);
+                    await HandlePreLogin(clientHandler, data);
                     break;
                     
                 case TdsProtocol.TDS7_LOGIN:
@@ -410,7 +411,7 @@ namespace RevTun
                     Console.WriteLine($"Unhandled TDS message type: 0x{header.Type:X2}");
                     break;
             }
-        }        private async Task HandleTunnelConnectAck(byte[] data)
+        }private async Task HandleTunnelConnectAck(byte[] data)
         {
             try
             {
@@ -539,17 +540,79 @@ namespace RevTun
                 Console.WriteLine($"Error handling tunnel disconnect: {ex.Message}");
             }
             return Task.CompletedTask;
-        }
-          private async Task HandlePreLogin(MssqlClientHandler clientHandler)
+        }        private async Task HandlePreLogin(MssqlClientHandler clientHandler, byte[] clientPacket)
         {
             Console.WriteLine("Processing Pre-Login request...");
             
-            // Send Pre-Login response
-            var response = TdsProtocol.CreatePreLoginPacket();
+            if (_options.Verbose)
+            {
+                LogTdsPacket(clientPacket, "RECEIVED Pre-Login");
+            }
+            
+            var clientEncryption = TdsProtocol.ParsePreLoginEncryption(clientPacket);
+            var serverEncryption = TdsProtocol.ENCRYPT_OFF; // Default to no encryption
+            
+            // Determine server response based on options and client request
+            if (_options.RequireEncryption)
+            {
+                serverEncryption = TdsProtocol.ENCRYPT_REQ;
+            }
+            else if (_options.SupportEncryption && (clientEncryption == TdsProtocol.ENCRYPT_ON || clientEncryption == TdsProtocol.ENCRYPT_REQ))
+            {
+                serverEncryption = TdsProtocol.ENCRYPT_ON;
+            }
+            
+            if (_options.Verbose)
+            {
+                Console.WriteLine($"Client encryption: {clientEncryption}, Server response: {serverEncryption}");
+            }
+            
+            // Send Pre-Login response with encryption negotiation
+            var response = TdsProtocol.CreatePreLoginPacket(serverEncryption);
             await clientHandler.Stream.WriteAsync(response, 0, response.Length);
             
-            LogTdsPacket(response, "SENT");
-            Console.WriteLine("Pre-Login response sent");
+            if (_options.Verbose)
+            {
+                LogTdsPacket(response, "SENT Pre-Login Response");
+            }
+            
+            // Setup TLS if negotiated and both sides agree
+            var useEncryption = (serverEncryption == TdsProtocol.ENCRYPT_ON || serverEncryption == TdsProtocol.ENCRYPT_REQ) &&
+                               (clientEncryption == TdsProtocol.ENCRYPT_ON || clientEncryption == TdsProtocol.ENCRYPT_REQ);
+            
+            if (useEncryption)
+            {
+                if (_options.Verbose)
+                {
+                    Console.WriteLine("Starting TLS handshake with client...");
+                }
+                
+                try
+                {
+                    // Create a self-signed certificate for the server
+                    var serverCertificate = CreateSelfSignedCertificate();
+                    var sslStream = new SslStream(clientHandler.Stream, false);
+                    
+                    await sslStream.AuthenticateAsServerAsync(serverCertificate);
+                    clientHandler.Stream = sslStream;
+                    clientHandler.IsEncrypted = true;
+                    
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine("TLS handshake completed successfully");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"TLS handshake failed: {ex.Message}");
+                    if (_options.RequireEncryption)
+                    {
+                        throw;
+                    }
+                }
+            }
+            
+            Console.WriteLine($"Pre-Login completed. Encryption: {(clientHandler.IsEncrypted ? "Enabled" : "Disabled")}");
         }
         
         private async Task HandleLogin(MssqlClientHandler clientHandler)
@@ -671,8 +734,7 @@ namespace RevTun
             
             Console.WriteLine("Server stopped");
         }
-        
-        private async Task<byte[]?> ReceiveTdsPacket(NetworkStream stream)
+          private async Task<byte[]?> ReceiveTdsPacket(Stream stream)
         {
             try
             {
@@ -716,6 +778,30 @@ namespace RevTun
             {
                 Console.WriteLine($"Error receiving TDS packet: {ex.Message}");
                 return null;
+            }
+        }
+        
+        private X509Certificate2 CreateSelfSignedCertificate()
+        {
+            // For tunnel purposes, create a simple self-signed certificate
+            // In production, you would use a proper certificate
+            try
+            {
+                // Try to create a minimal self-signed certificate using RSA
+                using (var rsa = System.Security.Cryptography.RSA.Create(2048))
+                {
+                    var req = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+                        "CN=RevTun-MSSQL-Server", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256,
+                        System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+                    
+                    var cert = req.CreateSelfSigned(DateTimeOffset.Now.AddDays(-1), DateTimeOffset.Now.AddYears(1));
+                    return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string?)null, X509KeyStorageFlags.Exportable);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to create self-signed certificate: {ex.Message}");
+                throw;
             }
         }
     }

@@ -26,14 +26,14 @@ namespace RevTun
             TargetPort = 0;
         }
     }
-    
-    public class MssqlClientHandler
+      public class MssqlClientHandler
     {
         public TcpClient TcpClient { get; set; }
-        public NetworkStream Stream { get; set; }
+        public Stream Stream { get; set; }
         public string ClientEndpoint { get; set; }
         public DateTime ConnectedAt { get; set; }
         public bool IsAuthenticated { get; set; }
+        public bool IsEncrypted { get; set; }
         
         public MssqlClientHandler(TcpClient client)
         {
@@ -42,6 +42,7 @@ namespace RevTun
             ClientEndpoint = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
             ConnectedAt = DateTime.Now;
             IsAuthenticated = false;
+            IsEncrypted = false;
         }
     }
     

@@ -55,7 +55,12 @@ namespace RevTun
             };
         }
         
-        public static byte[] CreatePreLoginPacket()
+        // TDS Encryption Types
+        public const byte ENCRYPT_NOT_SUP = 0x00;    // Encryption not supported
+        public const byte ENCRYPT_OFF = 0x01;        // Encryption off
+        public const byte ENCRYPT_ON = 0x02;         // Encryption on
+        public const byte ENCRYPT_REQ = 0x03;        // Encryption required
+          public static byte[] CreatePreLoginPacket(byte encryptionMode = ENCRYPT_ON)
         {
             var payload = new List<byte>();
             
@@ -79,8 +84,7 @@ namespace RevTun
             payload.Add(0x03); // Thread ID option
             payload.AddRange(BitConverter.GetBytes((ushort)0x0021)); // Offset
             payload.AddRange(BitConverter.GetBytes((ushort)0x0004)); // Length
-            
-            // Mars option
+              // Mars option
             payload.Add(0x04); // Mars option
             payload.AddRange(BitConverter.GetBytes((ushort)0x0025)); // Offset
             payload.AddRange(BitConverter.GetBytes((ushort)0x0001)); // Length
@@ -90,9 +94,8 @@ namespace RevTun
             
             // Version data (6 bytes)
             payload.AddRange(new byte[] { 0x10, 0x00, 0x07, 0xD0, 0x00, 0x00 }); // SQL Server 2016
-            
-            // Encryption (1 byte) - ENCRYPT_NOT_SUP
-            payload.Add(0x00);
+              // Encryption (1 byte) - Use provided encryption mode
+            payload.Add(encryptionMode);
             
             // Thread ID (4 bytes)
             payload.AddRange(BitConverter.GetBytes(Environment.CurrentManagedThreadId));
@@ -282,6 +285,54 @@ namespace RevTun
             Array.Copy(payload.ToArray(), 0, packet, 8, payload.Count);
             
             return packet;
+        }
+        
+        public static byte ParsePreLoginEncryption(byte[] packet)
+        {
+            if (packet.Length < 8)
+                return ENCRYPT_OFF;
+            
+            try
+            {
+                // Skip TDS header (8 bytes)
+                var offset = 8;
+                
+                // Parse pre-login options
+                while (offset < packet.Length)
+                {
+                    if (packet[offset] == 0xFF) // Terminator
+                        break;
+                        
+                    if (packet[offset] == 0x01) // Encryption option
+                    {
+                        // Read offset (next 2 bytes)
+                        if (offset + 2 < packet.Length)
+                        {
+                            var encOffset = BitConverter.ToUInt16(packet, offset + 1);
+                            // Read length (next 2 bytes) 
+                            if (offset + 4 < packet.Length)
+                            {
+                                var encLength = BitConverter.ToUInt16(packet, offset + 3);
+                                // Get encryption value
+                                if (encOffset < packet.Length && encLength > 0)
+                                {
+                                    return packet[encOffset];
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    
+                    // Skip to next option (1 byte type + 2 bytes offset + 2 bytes length)
+                    offset += 5;
+                }
+            }
+            catch
+            {
+                // If parsing fails, assume no encryption
+            }
+            
+            return ENCRYPT_OFF;
         }
     }
     
