@@ -59,4 +59,4 @@ curl --proxy localhost:1080 https://httpbin.org/ip
 
 ## Security Notes
 
-Educational/testing purpose only. No encryption beyond TDS obfuscation.
+No encryption beyond TDS obfuscation.

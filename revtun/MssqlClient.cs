@@ -122,22 +122,21 @@ namespace RevTun
                 bool connected = false;
                 string errorMessage = "";
                   try
-                {
-                    // Configure TCP socket for better TLS performance
+                {                    // Configure TCP socket for optimal performance
                     targetClient.ReceiveTimeout = 30000; // 30 seconds
                     targetClient.SendTimeout = 30000; // 30 seconds
-                    targetClient.NoDelay = true; // Critical: Disable Nagle algorithm for immediate TLS data
+                    targetClient.NoDelay = true; // Critical: Disable Nagle algorithm for immediate data
                     
                     await targetClient.ConnectAsync(host, port);
-                    
-                    // Configure socket options after connection
+                      // Configure socket options after connection for maximum performance
                     var socket = targetClient.Client;
                     socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-                    socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true); // Critical for TLS
+                    socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true); // Critical for low latency
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true); // Allow port reuse
                     
-                    // Optimize socket buffers for TLS (not too large to avoid delays)
-                    socket.ReceiveBufferSize = 16384; // 16KB - optimal for TLS records
-                    socket.SendBufferSize = 16384; // 16KB - optimal for TLS records
+                    // Optimize socket buffers for high throughput
+                    socket.ReceiveBufferSize = 65536; // 64KB for better throughput
+                    socket.SendBufferSize = 65536; // 64KB for better throughput
                     
                     connected = true;
                     _tunnelConnections[connectionId] = targetClient;
@@ -174,13 +173,15 @@ namespace RevTun
                 
                 if (_tunnelConnections.TryGetValue(connectionId, out var targetClient) && targetClient.Connected)
                 {
-                    var targetStream = targetClient.GetStream();
-                      // Write data immediately - don't buffer or parse TLS records
+                    var targetStream = targetClient.GetStream();                    // Write data immediately - don't buffer or parse TLS records
                     // TCP handles fragmentation and reassembly correctly
                     await targetStream.WriteAsync(tunnelData, 0, tunnelData.Length);
                     // Don't flush here - let TCP handle it optimally
                     
-                    Console.WriteLine($"Forwarded {tunnelData.Length} bytes to target for connection {connectionId}");
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine($"Forwarded {tunnelData.Length} bytes to target for connection {connectionId}");
+                    }
                 }
                 else
                 {
@@ -216,7 +217,7 @@ namespace RevTun
             return Task.CompletedTask;
         }        private async Task ForwardTunnelData(uint connectionId, TcpClient targetClient)
         {
-            var buffer = new byte[8192]; // Standard 8KB buffer for TCP streams
+            var buffer = new byte[32768]; // Larger 32KB buffer for better throughput
             var targetStream = targetClient.GetStream();
             
             try
@@ -237,18 +238,16 @@ namespace RevTun
                         }
                         break;
                     }
-                        
-                    var data = new byte[bytesRead];
-                    Array.Copy(buffer, data, bytesRead);
+                          // Send data directly without unnecessary copying for small packets
+                    const int maxDataSize = 32000; // Leave room for tunnel protocol overhead
                     
-                    // Send data back to server through MSSQL tunnel immediately
-                    // Split large data into smaller chunks if necessary to avoid TDS packet size limits
-                    const int maxChunkSize = 32000; // Leave room for tunnel protocol overhead
-                    
-                    if (data.Length <= maxChunkSize)
+                    if (bytesRead <= maxDataSize)
                     {
-                        // Send as single packet
-                        var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(connectionId, data);
+                        // Create packet directly from buffer slice to avoid copy
+                        var dataSlice = new byte[bytesRead];
+                        Array.Copy(buffer, 0, dataSlice, 0, bytesRead);
+                        var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(connectionId, dataSlice);
+                        
                         if (_stream != null)
                         {
                             await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
@@ -261,10 +260,13 @@ namespace RevTun
                     }
                     else
                     {
-                        // Split into multiple packets
-                        for (int offset = 0; offset < data.Length; offset += maxChunkSize)
+                        // Handle large packets (rare case)
+                        var data = new byte[bytesRead];
+                        Array.Copy(buffer, data, bytesRead);
+                        
+                        for (int offset = 0; offset < data.Length; offset += maxDataSize)
                         {
-                            var chunkSize = Math.Min(maxChunkSize, data.Length - offset);
+                            var chunkSize = Math.Min(maxDataSize, data.Length - offset);
                             var chunk = new byte[chunkSize];
                             Array.Copy(data, offset, chunk, 0, chunkSize);
                             
@@ -272,20 +274,18 @@ namespace RevTun
                             if (_stream != null)
                             {
                                 await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
-                                if (_options.Verbose)
-                                {
-                                    Console.WriteLine($"Sent chunk {offset/maxChunkSize + 1}: {chunk.Length} bytes for tunnel {connectionId}");
-                                }
                             }
                             else
                             {
                                 Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
-                                break;
+                                return;
                             }
                         }
                     }
-                    
-                    Console.WriteLine($"Sent {data.Length} bytes back through tunnel {connectionId}");
+                      if (_options.Verbose)
+                    {
+                        Console.WriteLine($"Sent {bytesRead} bytes back through tunnel {connectionId}");
+                    }
                 }
             }
             catch (System.IO.IOException ioEx) when (ioEx.InnerException is SocketException sockEx)

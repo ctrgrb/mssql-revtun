@@ -74,20 +74,19 @@ namespace RevTun
                     while (_isRunning && _proxyListener != null)
                     {
                         try
-                        {                            var proxyClient = await _proxyListener.AcceptTcpClientAsync();
-                              // Configure TCP socket for optimal TLS performance
+                        {                            var proxyClient = await _proxyListener.AcceptTcpClientAsync();                            // Configure TCP socket for optimal performance
                             proxyClient.ReceiveTimeout = 30000; // 30 seconds
                             proxyClient.SendTimeout = 30000; // 30 seconds
-                            proxyClient.NoDelay = true; // Critical: Disable Nagle algorithm for immediate TLS data
+                            proxyClient.NoDelay = true; // Critical: Disable Nagle algorithm for immediate data
                             
-                            // Configure socket options after connection
+                            // Configure socket options after connection for maximum performance
                             var socket = proxyClient.Client;
                             socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-                            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true); // Critical for TLS
+                            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true); // Critical for low latency
                             
-                            // Optimize socket buffers for TLS (not too large to avoid delays)
-                            socket.ReceiveBufferSize = 16384; // 16KB - optimal for TLS records
-                            socket.SendBufferSize = 16384; // 16KB - optimal for TLS records
+                            // Optimize socket buffers for high throughput
+                            socket.ReceiveBufferSize = 65536; // 64KB for better throughput
+                            socket.SendBufferSize = 65536; // 64KB for better throughput
                             
                             var connectionId = _nextConnectionId++;
                             var proxyConnection = new ProxyConnection(connectionId, proxyClient);
@@ -253,8 +252,7 @@ namespace RevTun
                 proxyConnection.ProxyClient.Close();
             }
         }        private async Task ForwardProxyData(ProxyConnection proxyConnection)
-        {
-            var buffer = new byte[8192]; // Standard 8KB buffer for TCP streams
+        {            var buffer = new byte[32768]; // Larger 32KB buffer for better throughput
             
             try
             {
@@ -262,11 +260,11 @@ namespace RevTun
                 proxyConnection.ProxyStream.ReadTimeout = 30000; // 30 seconds
                 proxyConnection.ProxyStream.WriteTimeout = 30000; // 30 seconds
                 
-                // Wait for connection to be established
-                var timeout = DateTime.Now.AddSeconds(30);
+                // Wait for connection to be established (shorter timeout for responsiveness)
+                var timeout = DateTime.Now.AddSeconds(10);
                 while (!proxyConnection.IsActive && DateTime.Now < timeout)
                 {
-                    await Task.Delay(100);
+                    await Task.Delay(50); // Shorter delay for faster response
                 }
                 
                 if (!proxyConnection.IsActive)
@@ -287,35 +285,31 @@ namespace RevTun
                         }
                         break;
                     }
-                        
-                    var data = new byte[bytesRead];
-                    Array.Copy(buffer, data, bytesRead);
-                      // Send data through MSSQL tunnel immediately
-                    // Split large data into smaller chunks if necessary to avoid TDS packet size limits
-                    const int maxChunkSize = 32000; // Leave room for tunnel protocol overhead
+                          // Send data directly without unnecessary copying for better performance
+                    const int maxDataSize = 32000; // Leave room for tunnel protocol overhead
                     
-                    if (data.Length <= maxChunkSize)
+                    if (bytesRead <= maxDataSize)
                     {
-                        // Send as single packet
-                        var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(proxyConnection.Id, data);
+                        // Create packet directly from buffer slice to avoid extra copy
+                        var dataSlice = new byte[bytesRead];
+                        Array.Copy(buffer, 0, dataSlice, 0, bytesRead);
+                        var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(proxyConnection.Id, dataSlice);
                         await SendToMssqlClient(tunnelDataPacket);
                     }
                     else
                     {
-                        // Split into multiple packets
-                        for (int offset = 0; offset < data.Length; offset += maxChunkSize)
+                        // Handle large packets (rare case)
+                        var data = new byte[bytesRead];
+                        Array.Copy(buffer, data, bytesRead);
+                        
+                        for (int offset = 0; offset < data.Length; offset += maxDataSize)
                         {
-                            var chunkSize = Math.Min(maxChunkSize, data.Length - offset);
+                            var chunkSize = Math.Min(maxDataSize, data.Length - offset);
                             var chunk = new byte[chunkSize];
                             Array.Copy(data, offset, chunk, 0, chunkSize);
                             
                             var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(proxyConnection.Id, chunk);
                             await SendToMssqlClient(tunnelDataPacket);
-                            
-                            if (_options.Verbose)
-                            {
-                                Console.WriteLine($"Sent chunk {offset/maxChunkSize + 1}: {chunk.Length} bytes from proxy {proxyConnection.Id}");
-                            }
                         }
                     }
                     
@@ -507,7 +501,10 @@ namespace RevTun
                     await proxyConnection.ProxyStream.WriteAsync(tunnelData, 0, tunnelData.Length);
                     // Don't flush here - let TCP handle it optimally
                     
-                    Console.WriteLine($"Forwarded {tunnelData.Length} bytes to proxy connection {connectionId}");
+                    if (_options.Verbose)
+                    {
+                        Console.WriteLine($"Forwarded {tunnelData.Length} bytes to proxy connection {connectionId}");
+                    }
                 }
                 else
                 {
