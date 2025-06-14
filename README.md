@@ -13,11 +13,11 @@ Server listens on port 1433 (MSSQL), opens proxy on port 1080 when client connec
 ## Building
 
 ```bash
-# Quick build
-dotnet build revtun
+# compile for windows
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true
 
-# Cross-platform build
-./build.sh
+# compile for linux
+dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true
 ```
 
 ## Usage
