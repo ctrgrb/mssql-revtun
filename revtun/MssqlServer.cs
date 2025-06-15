@@ -4,16 +4,32 @@ using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Collections.Concurrent;
+using System;
+using System.Threading.Tasks;
+using System.IO;
+using System.Security.Cryptography;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace RevTun
 {    public class MssqlServer
     {
+#if NETFRAMEWORK
+        private TcpListener _listener;
+        private TcpListener _proxyListener; // SOCKS proxy listener on port 1080
+#else
         private TcpListener? _listener;
         private TcpListener? _proxyListener; // SOCKS proxy listener on port 1080
+#endif
         private bool _isRunning;
         private readonly ServerOptions _options;
+#if NETFRAMEWORK
+        private readonly ConcurrentDictionary<uint, ProxyConnection> _proxyConnections = new ConcurrentDictionary<uint, ProxyConnection>();
+        private readonly ConcurrentDictionary<string, MssqlClientHandler> _connectedClients = new ConcurrentDictionary<string, MssqlClientHandler>();
+#else
         private readonly ConcurrentDictionary<uint, ProxyConnection> _proxyConnections = new();
         private readonly ConcurrentDictionary<string, MssqlClientHandler> _connectedClients = new();
+#endif
         private uint _nextConnectionId = 1;
         
         public MssqlServer(ServerOptions options)
@@ -35,9 +51,12 @@ namespace RevTun
             while (_isRunning)
             {
                 try
-                {
-                    var tcpClient = await _listener.AcceptTcpClientAsync();
+                {                    var tcpClient = await _listener.AcceptTcpClientAsync();
+#if NETFRAMEWORK
+                    var clientEndpoint = tcpClient.Client.RemoteEndPoint != null ? tcpClient.Client.RemoteEndPoint.ToString() : "Unknown";
+#else
                     var clientEndpoint = tcpClient.Client.RemoteEndPoint?.ToString() ?? "Unknown";
+#endif
                     Console.WriteLine($"MSSQL Client connected: {clientEndpoint}");
                     
                     var clientHandler = new MssqlClientHandler(tcpClient);
@@ -713,9 +732,8 @@ namespace RevTun
         }
           public void Stop()
         {
-            _isRunning = false;
-            _listener?.Stop();
-            _proxyListener?.Stop();
+            _isRunning = false;            if (_listener != null) _listener.Stop();
+            if (_proxyListener != null) _proxyListener.Stop();
             
             // Close all proxy connections
             foreach (var connection in _proxyConnections.Values)
@@ -733,8 +751,8 @@ namespace RevTun
             _connectedClients.Clear();
             
             Console.WriteLine("Server stopped");
-        }
-          private async Task<byte[]?> ReceiveTdsPacket(Stream stream)
+        }          
+          private async Task<byte[]> ReceiveTdsPacket(Stream stream)
         {
             try
             {
@@ -745,7 +763,7 @@ namespace RevTun
                 {
                     var bytesRead = await stream.ReadAsync(headerBuffer, totalHeaderRead, 8 - totalHeaderRead);
                     if (bytesRead == 0)
-                        return null; // Connection closed
+                        return new byte[0]; // Connection closed
                     totalHeaderRead += bytesRead;
                 }
                 
@@ -762,11 +780,10 @@ namespace RevTun
                     var totalDataRead = 0;
                     while (totalDataRead < remainingBytes)
                     {
-                        var bytesRead = await stream.ReadAsync(fullPacket, 8 + totalDataRead, remainingBytes - totalDataRead);
-                        if (bytesRead == 0)
+                        var bytesRead = await stream.ReadAsync(fullPacket, 8 + totalDataRead, remainingBytes - totalDataRead);                        if (bytesRead == 0)
                         {
                             Console.WriteLine("Warning: Connection closed while reading packet data");
-                            return null;
+                            return new byte[0];
                         }
                         totalDataRead += bytesRead;
                     }
@@ -775,9 +792,8 @@ namespace RevTun
                 return fullPacket;
             }
             catch (Exception ex)
-            {
-                Console.WriteLine($"Error receiving TDS packet: {ex.Message}");
-                return null;
+            {                Console.WriteLine($"Error receiving TDS packet: {ex.Message}");
+                return new byte[0];
             }
         }
         
@@ -795,7 +811,7 @@ namespace RevTun
                         System.Security.Cryptography.RSASignaturePadding.Pkcs1);
                     
                     var cert = req.CreateSelfSigned(DateTimeOffset.Now.AddDays(-1), DateTimeOffset.Now.AddYears(1));
-                    return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string?)null, X509KeyStorageFlags.Exportable);
+                    return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string)null, X509KeyStorageFlags.Exportable);
                 }
             }
             catch (Exception ex)

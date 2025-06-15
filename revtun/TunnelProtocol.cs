@@ -1,4 +1,8 @@
 using System.Net.Sockets;
+using System;
+using System.IO;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace RevTun
 {    public class ProxyConnection
@@ -33,13 +37,11 @@ namespace RevTun
         public string ClientEndpoint { get; set; }
         public DateTime ConnectedAt { get; set; }
         public bool IsAuthenticated { get; set; }
-        public bool IsEncrypted { get; set; }
-        
-        public MssqlClientHandler(TcpClient client)
+        public bool IsEncrypted { get; set; }        public MssqlClientHandler(TcpClient client)
         {
             TcpClient = client;
             Stream = client.GetStream();
-            ClientEndpoint = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
+            ClientEndpoint = client.Client.RemoteEndPoint != null ? client.Client.RemoteEndPoint.ToString() : "Unknown";
             ConnectedAt = DateTime.Now;
             IsAuthenticated = false;
             IsEncrypted = false;

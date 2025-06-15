@@ -1,4 +1,8 @@
 using System.Text;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Diagnostics;
 
 namespace RevTun
 {
@@ -122,7 +126,7 @@ namespace RevTun
             payload.AddRange(BitConverter.GetBytes((uint)0x74000004)); // TDS Version
             payload.AddRange(BitConverter.GetBytes((uint)0x00000800)); // Packet size
             payload.AddRange(BitConverter.GetBytes((uint)0x00000007)); // Client version
-            payload.AddRange(BitConverter.GetBytes((uint)Environment.ProcessId)); // Client PID
+            payload.AddRange(BitConverter.GetBytes((uint)Process.GetCurrentProcess().Id)); // Client PID
             payload.AddRange(BitConverter.GetBytes((uint)0x00000000)); // Connection ID
             payload.Add(0x01); // Option flags 1 - INIT_LANG_FATAL
             payload.Add(0x00); // Option flags 2

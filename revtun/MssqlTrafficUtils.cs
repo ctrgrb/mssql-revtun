@@ -1,4 +1,7 @@
 using System.Text;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace RevTun
 {
@@ -51,19 +54,25 @@ namespace RevTun
             Console.WriteLine("   - Perfect for analyzing MSSQL protocol behavior");
             Console.WriteLine();
         }
-        
-        public static string GenerateSampleSqlQuery(int queryType)
+          public static string GenerateSampleSqlQuery(int queryType)
         {
-            return queryType switch
+            switch (queryType)
             {
-                1 => "SELECT @@VERSION",
-                2 => "SELECT * FROM sys.databases",
-                3 => "SELECT name, database_id, create_date FROM sys.databases",
-                4 => "SELECT @@SERVERNAME, @@SERVICENAME, @@SPID",
-                5 => "SELECT GETDATE() as CurrentTime",
-                6 => "SELECT COUNT(*) FROM sys.objects",
-                _ => "SELECT 'Hello from RevTun' as Message"
-            };
+                case 1:
+                    return "SELECT @@VERSION";
+                case 2:
+                    return "SELECT * FROM sys.databases";
+                case 3:
+                    return "SELECT name, database_id, create_date FROM sys.databases";
+                case 4:
+                    return "SELECT @@SERVERNAME, @@SERVICENAME, @@SPID";
+                case 5:
+                    return "SELECT GETDATE() as CurrentTime";
+                case 6:
+                    return "SELECT COUNT(*) FROM sys.objects";
+                default:
+                    return "SELECT 'Hello from RevTun' as Message";
+            }
         }
         
         public static void PrintTdsPacketAnalysis(byte[] packet)
@@ -126,24 +135,35 @@ namespace RevTun
             
             Console.WriteLine();
         }
-        
-        private static string GetTdsMessageTypeDescription(byte type)
+          private static string GetTdsMessageTypeDescription(byte type)
         {
-            return type switch
+            switch (type)
             {
-                0x01 => "SQL Batch",
-                0x02 => "Pre-TDS7 Login",
-                0x03 => "RPC (Remote Procedure Call)",
-                0x04 => "Tabular Result",
-                0x06 => "Attention Signal",
-                0x07 => "Bulk Load Data",
-                0x08 => "Federated Authentication Token",
-                0x0E => "Transaction Manager Request",
-                0x10 => "TDS7 Login",
-                0x11 => "SSPI Message",
-                0x12 => "Pre-Login",
-                _ => "Unknown/Reserved"
-            };
+                case 0x01:
+                    return "SQL Batch";
+                case 0x02:
+                    return "Pre-TDS7 Login";
+                case 0x03:
+                    return "RPC (Remote Procedure Call)";
+                case 0x04:
+                    return "Tabular Result";
+                case 0x06:
+                    return "Attention Signal";
+                case 0x07:
+                    return "Bulk Load Data";
+                case 0x08:
+                    return "Federated Authentication Token";
+                case 0x0E:
+                    return "Transaction Manager Request";
+                case 0x10:
+                    return "TDS7 Login";
+                case 0x11:
+                    return "SSPI Message";
+                case 0x12:
+                    return "Pre-Login";
+                default:
+                    return "Unknown/Reserved";
+            }
         }
         
         private static string GetTdsStatusDescription(byte status)

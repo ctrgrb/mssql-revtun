@@ -3,14 +3,28 @@ using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Collections.Concurrent;
+using System;
+using System.Threading.Tasks;
+using System.IO;
+using System.Net;
+using System.Linq;
 
 namespace RevTun
 {    public class MssqlClient
     {
+#if NETFRAMEWORK
+        private TcpClient _client;
+        private Stream _stream;
+#else
         private TcpClient? _client;
         private Stream? _stream;
+#endif
         private readonly ClientOptions _options;
+#if NETFRAMEWORK
+        private readonly ConcurrentDictionary<uint, TcpClient> _tunnelConnections = new ConcurrentDictionary<uint, TcpClient>();
+#else
         private readonly ConcurrentDictionary<uint, TcpClient> _tunnelConnections = new();
+#endif
         private bool _isConnected = false;
         
         public MssqlClient(ClientOptions options)
@@ -548,12 +562,20 @@ namespace RevTun
             catch (Exception ex)
             {
                 Console.WriteLine($"Error executing SQL: {ex.Message}");
-            }
-        }        private async Task<byte[]?> ReceiveTdsPacket()
+            }        }        
+#if NETFRAMEWORK
+        private async Task<byte[]> ReceiveTdsPacket()
+        {
+            try
+            {
+                if (_stream == null) return new byte[0];
+#else
+        private async Task<byte[]?> ReceiveTdsPacket()
         {
             try
             {
                 if (_stream == null) return null;
+#endif
                 
                 // Read TDS header (8 bytes) - ensure we get all 8 bytes
                 var headerBuffer = new byte[8];
@@ -562,7 +584,12 @@ namespace RevTun
                 {
                     var bytesRead = await _stream.ReadAsync(headerBuffer, totalHeaderRead, 8 - totalHeaderRead);
                     if (bytesRead == 0)
+                        
+#if NETFRAMEWORK
+                        return new byte[0]; // Connection closed
+#else
                         return null; // Connection closed
+#endif
                     totalHeaderRead += bytesRead;
                 }
                 
@@ -583,18 +610,26 @@ namespace RevTun
                         if (bytesRead == 0)
                         {
                             Console.WriteLine("Warning: Connection closed while reading packet data");
+                            
+#if NETFRAMEWORK
+                            return new byte[0];
+#else
                             return null;
+#endif
                         }
                         totalDataRead += bytesRead;
                     }
                 }
                 
-                return fullPacket;
-            }            catch (Exception ex)
+                return fullPacket;            }            catch (Exception ex)
             {
                 if (_options.Debug)
                     Console.WriteLine($"Error receiving packet: {ex.Message}");
+#if NETFRAMEWORK
+                return new byte[0];
+#else
                 return null;
+#endif
             }
         }
         
@@ -656,24 +691,35 @@ namespace RevTun
                 Console.WriteLine();
             }
         }
-        
-        private string GetTdsTypeDescription(byte type)
+          private string GetTdsTypeDescription(byte type)
         {
-            return type switch
+            switch (type)
             {
-                TdsProtocol.SQL_BATCH => "SQL_BATCH",
-                TdsProtocol.PRE_TDS7_LOGIN => "PRE_TDS7_LOGIN",
-                TdsProtocol.RPC => "RPC",
-                TdsProtocol.TABULAR_RESULT => "TABULAR_RESULT",
-                TdsProtocol.ATTENTION_SIGNAL => "ATTENTION_SIGNAL",
-                TdsProtocol.BULK_LOAD_DATA => "BULK_LOAD_DATA",
-                TdsProtocol.FEDERATED_AUTH_TOKEN => "FEDERATED_AUTH_TOKEN",
-                TdsProtocol.TRANSACTION_MANAGER => "TRANSACTION_MANAGER",
-                TdsProtocol.TDS7_LOGIN => "TDS7_LOGIN",
-                TdsProtocol.SSPI => "SSPI",
-                TdsProtocol.PRE_LOGIN => "PRE_LOGIN",
-                _ => "UNKNOWN"
-            };
+                case TdsProtocol.SQL_BATCH:
+                    return "SQL_BATCH";
+                case TdsProtocol.PRE_TDS7_LOGIN:
+                    return "PRE_TDS7_LOGIN";
+                case TdsProtocol.RPC:
+                    return "RPC";
+                case TdsProtocol.TABULAR_RESULT:
+                    return "TABULAR_RESULT";
+                case TdsProtocol.ATTENTION_SIGNAL:
+                    return "ATTENTION_SIGNAL";
+                case TdsProtocol.BULK_LOAD_DATA:
+                    return "BULK_LOAD_DATA";
+                case TdsProtocol.FEDERATED_AUTH_TOKEN:
+                    return "FEDERATED_AUTH_TOKEN";
+                case TdsProtocol.TRANSACTION_MANAGER:
+                    return "TRANSACTION_MANAGER";
+                case TdsProtocol.TDS7_LOGIN:
+                    return "TDS7_LOGIN";
+                case TdsProtocol.SSPI:
+                    return "SSPI";
+                case TdsProtocol.PRE_LOGIN:
+                    return "PRE_LOGIN";
+                default:
+                    return "UNKNOWN";
+            }
         }
           public void SendCustomData(byte[] data)
         {
@@ -682,13 +728,18 @@ namespace RevTun
                 _stream.Write(data, 0, data.Length);
                 Console.WriteLine($"Sent {data.Length} bytes of custom data");
                 LogTdsPacket(data, "SENT CUSTOM");
-            }
-        }
-        
+            }        }          
+#if NETFRAMEWORK
+        public async Task<byte[]> ReceiveCustomData(int expectedLength)
+        {
+            if (_stream == null || _client == null || !_client.Connected)
+                return new byte[0];
+#else
         public async Task<byte[]?> ReceiveCustomData(int expectedLength)
         {
             if (_stream == null || _client == null || !_client.Connected)
                 return null;
+#endif
                 
             var buffer = new byte[expectedLength];
             var bytesRead = await _stream.ReadAsync(buffer, 0, expectedLength);
@@ -699,13 +750,19 @@ namespace RevTun
                 Array.Copy(buffer, result, bytesRead);
                 Console.WriteLine($"Received {bytesRead} bytes of custom data");
                 LogTdsPacket(result, "RECEIVED CUSTOM");
-                return result;
-            }
-            
+                return result;            }            
+#if NETFRAMEWORK
+            return new byte[0];
+#else
             return null;
+#endif
         }
         
+#if NETFRAMEWORK
+        private bool ValidateServerCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+#else
         private bool ValidateServerCertificate(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
+#endif
         {
             // For tunnel purposes, we accept any certificate
             // In production, you might want to implement proper certificate validation
