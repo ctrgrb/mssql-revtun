@@ -18,8 +18,7 @@ namespace RevTun
             }
 
             var command = args[0].ToLower();
-            
-            switch (command)
+              switch (command)
             {
                 case "server":
                 case "s":
@@ -35,14 +34,6 @@ namespace RevTun
                 case "-h":
                     PrintHelp();
                     break;
-                case "usage":
-                case "u":
-                    MssqlTrafficUtils.PrintUsageInstructions();
-                    break;
-                case "info":
-                case "i":
-                    MssqlTrafficUtils.PrintNetworkTrafficSimulationOptions();
-                    break;
                 default:
                     Console.WriteLine($"Unknown command: {command}");
                     PrintUsage();
@@ -53,22 +44,19 @@ namespace RevTun
         static void PrintUsage()
         {
             MssqlTrafficUtils.PrintWelcomeMessage();
-            Console.WriteLine("Usage: dotnet run [command] [options]");
-            Console.WriteLine();
-            Console.WriteLine("Commands:");
+            Console.WriteLine("Usage: revtun [command] [options]");
+            Console.WriteLine();            Console.WriteLine("Commands:");
             Console.WriteLine("  server, s      Start MSSQL server (listens on port 1433)");
             Console.WriteLine("  client, c      Start MSSQL client (connects to server)");
             Console.WriteLine("  help, h        Show detailed help");
-            Console.WriteLine("  usage, u       Show usage instructions");
-            Console.WriteLine("  info, i        Show traffic analysis options");
             Console.WriteLine();
             Console.WriteLine("Examples:");
-            Console.WriteLine("  dotnet run server");
-            Console.WriteLine("  dotnet run client");
-            Console.WriteLine("  dotnet run server --port 1433 --proxy-port 1080");
-            Console.WriteLine("  dotnet run client --host localhost --port 1433");
+            Console.WriteLine("  revtun server");
+            Console.WriteLine("  revtun client");
+            Console.WriteLine("  revtun server --port 1433 --proxy-port 1080");
+            Console.WriteLine("  revtun client --host localhost --port 1433");
             Console.WriteLine();
-            Console.WriteLine("Use 'dotnet run help' for detailed options.");
+            Console.WriteLine("Use 'revtun help' for detailed options.");
         }
           static void PrintHelp()
         {
@@ -96,22 +84,22 @@ namespace RevTun
             Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
             Console.WriteLine("  # Start server on custom port");
-            Console.WriteLine("  dotnet run server --port 1435 --proxy-port 8080");
+            Console.WriteLine("  revtun server --port 1435 --proxy-port 8080");
             Console.WriteLine();
             Console.WriteLine("  # Connect client to remote server");
-            Console.WriteLine("  dotnet run client --host 192.168.1.100 --port 1433");
+            Console.WriteLine("  revtun client --host 192.168.1.100 --port 1433");
             Console.WriteLine();
             Console.WriteLine("  # Server with verbose logging");
-            Console.WriteLine("  dotnet run server --verbose");
+            Console.WriteLine("  revtun server --verbose");
             Console.WriteLine();
             Console.WriteLine("  # Client with TLS encryption");
-            Console.WriteLine("  dotnet run client --encrypt --host server.example.com");
+            Console.WriteLine("  revtun client --encrypt --host server.example.com");
             Console.WriteLine();
             Console.WriteLine("  # Server requiring encryption");
-            Console.WriteLine("  dotnet run server --require-encryption");
+            Console.WriteLine("  revtun server --require-encryption");
             Console.WriteLine();
             Console.WriteLine("  # Client with custom credentials");
-            Console.WriteLine("  dotnet run client --username admin --password secret --database mydb");
+            Console.WriteLine("  revtun client --username admin --password secret --database mydb");
         }        static async Task StartServer(string[] args)
         {
             var options = ParseServerOptions(args);

