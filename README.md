@@ -30,12 +30,12 @@ dotnet build -c Release -f net48 -p:Platform=AnyCPU
 
 ### Server
 ```bash
-./revtun server --port 1433 --proxy-port 1080
+./revtun server --port 1433 --proxy-port 1080 --password test123
 ```
 
 ### Client 
 ```bash
-./revtun client --host server.com --port 1433 --encrypt
+./revtun client --host server.com --port 1433 --encrypt --password test123
 ```
 
 ### Relay (Traffic Forwarding)
@@ -54,41 +54,40 @@ proxychains nmap -sT 192.168.1.0/24
 ### Deployment
 ```bash
 # Client from internal network  
-execute-assembly revtun.exe client --host [external-ip] --port 1433 --encrypt
+execute-assembly revtun.exe client --host [external-ip] --port 1433 --encrypt --password test123
 
 # Relay on pivot host
-execute-assembly revtun.exe relay --host [internal-sql-server] --port 1433
+execute-assembly revtun.exe relay --host [internal-sql-server] --port 1433 
 ```
 
 ## Command Options
+```
+SERVER OPTIONS:
+  --port, -p <port>          MSSQL server port (default: 1433)
+  --proxy-port <port>        Proxy listener port (default: 1080)
+  --bind <address>           Bind address (default: 0.0.0.0)
+  --verbose, -v              Enable verbose logging
+  --require-encryption       Require TLS encryption for all connections
+  --no-encryption            Disable TLS encryption support
 
-### Server
-```
---port, -p <port>          MSSQL server port (default: 1433)
---proxy-port <port>        SOCKS proxy port (default: 1080)  
---bind <address>           Bind address (default: 0.0.0.0)
---verbose, -v              Enable verbose logging
---require-encryption       Require TLS encryption
-```
+CLIENT OPTIONS:
+  --host, -h <hostname>      Server hostname (default: localhost)
+  --port, -p <port>          Server port (default: 1433)
+  --username, -u <user>      SQL username (default: sa)
+  --password <pass>          Password for authentication (REQUIRED)
+  --database, -d <db>        Database name (default: master)
+  --auto-exit                Exit after connection test
+  --verbose, -v              Enable verbose logging
+  --debug                    Enable debug output (shows all messages)
+  --encrypt                  Request TLS encryption (default: enabled)
+  --no-encrypt               Disable TLS encryption
+  --require-encryption       Require TLS encryption (fail if not supported)
 
-### Client  
-```
---host, -h <hostname>      Server hostname (default: localhost)
---port, -p <port>          Server port (default: 1433)
---username, -u <user>      SQL username (default: sa)
---password <pass>          SQL password (default: Password123)
---auto-exit                Exit after connection test
---verbose, -v              Enable verbose logging
---debug                    Enable debug output
---encrypt                  Request TLS encryption
-```
-
-### Relay
-```
---port, -p <port>          Relay listener port (default: 1433)
---bind <address>           Bind address (default: 0.0.0.0)
---host, -h <hostname>      Target server hostname (default: localhost)
---server-port <port>       Target server port (default: 1433)
---verbose, -v              Enable verbose logging
---debug                    Enable debug output with TDS packet analysis
+RELAY OPTIONS:
+  --port, -p <port>          Relay listener port (default: 1433)
+  --bind <address>           Bind address (default: 0.0.0.0)
+  --host, -h <hostname>      Target server hostname (default: localhost)
+  --server-port <port>       Target server port (default: 1433)
+  --verbose, -v              Enable verbose logging
+  --debug                    Enable debug output (shows TDS packet details)
 ```
