@@ -25,10 +25,6 @@ dotnet publish -c Release -f net8.0 -r linux-x64 --self-contained true -p:Publis
 # Cobalt Strike (.NET Framework 4.8)
 dotnet build -c Release -f net48 -p:Platform=AnyCPU
 ```
-```bash
-# Build for execute-assembly compatibility
-dotnet build -c Release -f net48 -p:Platform=AnyCPU
-```
 
 ### Build (Multi-Platform)
 Use the provided PowerShell script for automated builds:
@@ -40,12 +36,12 @@ Use the provided PowerShell script for automated builds:
 
 ## Usage
 
-### Server (Reverse Tunnel)
+### Server
 ```bash
 ./revtun server --port 1433 --proxy-port 1080
 ```
 
-### Client (Connect to Server)  
+### Client 
 ```bash
 ./revtun client --host server.com --port 1433 --encrypt
 ```
