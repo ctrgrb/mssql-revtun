@@ -536,8 +536,8 @@ namespace RevTun
                     {
                         Console.WriteLine("DEBUG: Adjusted offset out of bounds");
                     }                }
-                
-                // Also check what the pattern search found
+                  // Also check what the pattern search found
+                var originalPasswordOffset = adjustedPasswordOffset; // Save before modification
                 if (foundPatternOffset >= 0)
                 {
                     Console.WriteLine($"DEBUG: Pattern found at offset {foundPatternOffset}, but calculated offset is {adjustedPasswordOffset}");
@@ -566,11 +566,24 @@ namespace RevTun
                 // Database offset and length
                 var databaseOffset = BitConverter.ToUInt16(loginData, 0x44) - 8;
                 var databaseLength = BitConverter.ToUInt16(loginData, 0x46);
-                
-                // Extract strings from variable portion
-                if (usernameLength > 0 && usernameOffset + usernameLength * 2 <= loginData.Length)
+                  // Extract strings from variable portion                // Apply the same offset correction we found for the password to the username
+                var offsetCorrection = 0;
+                if (foundPatternOffset >= 0)
                 {
-                    loginInfo.Username = Encoding.Unicode.GetString(loginData, usernameOffset, usernameLength * 2);
+                    offsetCorrection = originalPasswordOffset - foundPatternOffset;
+                    Console.WriteLine($"DEBUG: Offset correction calculation: originalPasswordOffset({originalPasswordOffset}) - foundPatternOffset({foundPatternOffset}) = {offsetCorrection}");
+                    if (offsetCorrection != 0)
+                    {
+                        Console.WriteLine($"DEBUG: Applying offset correction of {offsetCorrection} to username");
+                    }
+                }
+                
+                var correctedUsernameOffset = usernameOffset - offsetCorrection;
+                Console.WriteLine($"DEBUG: Username offset correction: original({usernameOffset}) - correction({offsetCorrection}) = {correctedUsernameOffset}");
+                if (usernameLength > 0 && correctedUsernameOffset >= 0 && correctedUsernameOffset + usernameLength * 2 <= loginData.Length)
+                {
+                    loginInfo.Username = Encoding.Unicode.GetString(loginData, correctedUsernameOffset, usernameLength * 2);
+                    Console.WriteLine($"DEBUG: Username extracted from offset {correctedUsernameOffset} (original: {usernameOffset}): '{loginInfo.Username}'");
                 }
                   if (passwordLength > 0 && adjustedPasswordOffset + passwordLength * 2 <= loginData.Length)
                 {
@@ -594,20 +607,25 @@ namespace RevTun
                     loginInfo.Password = Encoding.Unicode.GetString(passwordBytes);
                     Console.WriteLine($"DEBUG: Decoded password: '{loginInfo.Password}'");
                 }
-                
-                if (databaseLength > 0 && databaseOffset + databaseLength * 2 <= loginData.Length)
+                  var correctedDatabaseOffset = databaseOffset - offsetCorrection;
+                if (databaseLength > 0 && correctedDatabaseOffset >= 0 && correctedDatabaseOffset + databaseLength * 2 <= loginData.Length)
                 {
-                    loginInfo.Database = Encoding.Unicode.GetString(loginData, databaseOffset, databaseLength * 2);
+                    loginInfo.Database = Encoding.Unicode.GetString(loginData, correctedDatabaseOffset, databaseLength * 2);
+                    Console.WriteLine($"DEBUG: Database extracted from offset {correctedDatabaseOffset} (original: {databaseOffset}): '{loginInfo.Database}'");
                 }
                 
-                if (appNameLength > 0 && appNameOffset + appNameLength * 2 <= loginData.Length)
+                var correctedAppNameOffset = appNameOffset - offsetCorrection;
+                if (appNameLength > 0 && correctedAppNameOffset >= 0 && correctedAppNameOffset + appNameLength * 2 <= loginData.Length)
                 {
-                    loginInfo.ApplicationName = Encoding.Unicode.GetString(loginData, appNameOffset, appNameLength * 2);
+                    loginInfo.ApplicationName = Encoding.Unicode.GetString(loginData, correctedAppNameOffset, appNameLength * 2);
+                    Console.WriteLine($"DEBUG: App name extracted from offset {correctedAppNameOffset} (original: {appNameOffset}): '{loginInfo.ApplicationName}'");
                 }
                 
-                if (libNameLength > 0 && libNameOffset + libNameLength * 2 <= loginData.Length)
+                var correctedLibNameOffset = libNameOffset - offsetCorrection;
+                if (libNameLength > 0 && correctedLibNameOffset >= 0 && correctedLibNameOffset + libNameLength * 2 <= loginData.Length)
                 {
-                    loginInfo.LibraryName = Encoding.Unicode.GetString(loginData, libNameOffset, libNameLength * 2);
+                    loginInfo.LibraryName = Encoding.Unicode.GetString(loginData, correctedLibNameOffset, libNameLength * 2);
+                    Console.WriteLine($"DEBUG: Library name extracted from offset {correctedLibNameOffset} (original: {libNameOffset}): '{loginInfo.LibraryName}'");
                 }
             }
             catch (Exception ex)
