@@ -37,14 +37,15 @@ namespace RevTun
         public string ClientEndpoint { get; set; }
         public DateTime ConnectedAt { get; set; }
         public bool IsAuthenticated { get; set; }
-        public bool IsEncrypted { get; set; }        public MssqlClientHandler(TcpClient client)
+        public bool IsEncrypted { get; set; }
+        public bool ExpectingTlsHandshake { get; set; }        public MssqlClientHandler(TcpClient client)
         {
             TcpClient = client;
             Stream = client.GetStream();
             ClientEndpoint = client.Client.RemoteEndPoint != null ? client.Client.RemoteEndPoint.ToString() : "Unknown";
-            ConnectedAt = DateTime.Now;
-            IsAuthenticated = false;
+            ConnectedAt = DateTime.Now;            IsAuthenticated = false;
             IsEncrypted = false;
+            ExpectingTlsHandshake = false;
         }
     }
     

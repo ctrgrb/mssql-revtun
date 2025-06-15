@@ -10,7 +10,7 @@ namespace RevTun
         public static void PrintWelcomeMessage()
         {
             Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║                    RevTun - MSSQL Traffic Simulator         ║");
+            Console.WriteLine("║                   MSSQL Traffic Simulator                   ║");
             Console.WriteLine("║                                                              ║");
             Console.WriteLine("║  This tool simulates MSSQL network traffic using the        ║");
             Console.WriteLine("║  Tabular Data Stream (TDS) protocol.                        ║");
@@ -71,7 +71,7 @@ namespace RevTun
                 case 6:
                     return "SELECT COUNT(*) FROM sys.objects";
                 default:
-                    return "SELECT 'Hello from RevTun' as Message";
+                    return "SELECT 'Hello from SQL Server' as Message";
             }
         }
         

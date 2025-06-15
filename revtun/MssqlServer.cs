@@ -133,17 +133,15 @@ namespace RevTun
                 Console.WriteLine($"Error starting proxy listener: {ex.Message}");
             }
             
-            return Task.CompletedTask;
-        }private async Task HandleMssqlClientAsync(MssqlClientHandler clientHandler)
+            return Task.CompletedTask;        }private async Task HandleMssqlClientAsync(MssqlClientHandler clientHandler)
         {
             var client = clientHandler.TcpClient;
-            var stream = clientHandler.Stream;
             
             try
             {                while (client.Connected && _isRunning)
                 {
-                    // Read complete TDS packet
-                    var packet = await ReceiveTdsPacket(stream);
+                    // Read complete TDS packet - always use current stream (may be SslStream after TLS)
+                    var packet = await ReceiveTdsPacket(clientHandler.Stream);
                     if (packet == null)
                         break;
                     
@@ -398,14 +396,18 @@ namespace RevTun
             }
         }        private async Task ProcessTdsMessage(MssqlClientHandler clientHandler, TdsHeader header, byte[] data)
         {
+            if (_options.Verbose)
+            {
+                Console.WriteLine($"Processing TDS message type: 0x{header.Type:X2} ({GetTdsMessageTypeName(header.Type)})");
+            }
+
             switch (header.Type)
             {
                 case TdsProtocol.PRE_LOGIN:
                     await HandlePreLogin(clientHandler, data);
                     break;
-                    
-                case TdsProtocol.TDS7_LOGIN:
-                    await HandleLogin(clientHandler);
+                      case TdsProtocol.TDS7_LOGIN:
+                    await HandleLogin(clientHandler, data);
                     break;
                     
                 case TdsProtocol.SQL_BATCH:
@@ -580,6 +582,8 @@ namespace RevTun
                 serverEncryption = TdsProtocol.ENCRYPT_ON;
             }
             
+            Console.WriteLine($"Encryption negotiation: Client={GetEncryptionName(clientEncryption)}, Server response={GetEncryptionName(serverEncryption)}");
+            
             if (_options.Verbose)
             {
                 Console.WriteLine($"Client encryption: {clientEncryption}, Server response: {serverEncryption}");
@@ -618,6 +622,7 @@ namespace RevTun
                     if (_options.Verbose)
                     {
                         Console.WriteLine("TLS handshake completed successfully");
+                        Console.WriteLine($"✓ Stream switched to SslStream for encrypted communication");
                     }
                 }
                 catch (Exception ex)
@@ -632,20 +637,64 @@ namespace RevTun
             
             Console.WriteLine($"Pre-Login completed. Encryption: {(clientHandler.IsEncrypted ? "Enabled" : "Disabled")}");
         }
-        
-        private async Task HandleLogin(MssqlClientHandler clientHandler)
+          private async Task HandleLogin(MssqlClientHandler clientHandler, byte[] data)
         {
             Console.WriteLine("Processing Login request...");
             
-            // Send Login acknowledgment (simplified)
-            var loginAck = CreateLoginAckPacket();
-            await clientHandler.Stream.WriteAsync(loginAck, 0, loginAck.Length);
-            
-            // Mark client as authenticated
-            clientHandler.IsAuthenticated = true;
-            
-            LogTdsPacket(loginAck, "SENT");
-            Console.WriteLine($"Login acknowledgment sent - Client {clientHandler.ClientEndpoint} authenticated");
+            try
+            {
+                // Parse the login packet to extract credentials
+                var loginInfo = TdsProtocol.ParseLoginPacket(data);
+                
+                if (_options.Verbose)
+                {
+                    Console.WriteLine($"Login attempt - Username: {loginInfo.Username}, Database: {loginInfo.Database}");
+                    Console.WriteLine($"Application: {loginInfo.ApplicationName}, Library: {loginInfo.LibraryName}");
+                }
+                  // Validate the password
+                Console.WriteLine($"Received password: '{loginInfo.Password}', Expected: '{_options.Password}'");
+                if (string.IsNullOrEmpty(loginInfo.Password) || loginInfo.Password != _options.Password)
+                {
+                    Console.WriteLine($"Authentication failed for user '{loginInfo.Username}' - invalid password");
+                    
+                    // Send login failure and close connection
+                    var loginError = CreateLoginErrorPacket("Login failed for user '" + loginInfo.Username + "'.");
+                    await clientHandler.Stream.WriteAsync(loginError, 0, loginError.Length);
+                      // Close the connection after a short delay
+                    await Task.Delay(1000);
+                    clientHandler.TcpClient.Close();
+                    return;
+                }
+                
+                Console.WriteLine($"Authentication successful for user '{loginInfo.Username}'");
+                
+                // Send Login acknowledgment (simplified)
+                var loginAck = CreateLoginAckPacket();
+                await clientHandler.Stream.WriteAsync(loginAck, 0, loginAck.Length);
+                
+                // Mark client as authenticated
+                clientHandler.IsAuthenticated = true;
+                
+                if (_options.Verbose)
+                {
+                    Console.WriteLine($"Login acknowledgment sent - Client {clientHandler.ClientEndpoint} authenticated");
+                    Console.WriteLine($"Post-authentication stream type: {clientHandler.Stream.GetType().Name}");
+                    Console.WriteLine($"Encryption active: {clientHandler.IsEncrypted}");
+                }
+                
+                LogTdsPacket(loginAck, "SENT");
+                Console.WriteLine($"Login acknowledgment sent - Client {clientHandler.ClientEndpoint} authenticated");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error processing login: {ex.Message}");
+                
+                // Send generic login error and close connection
+                var loginError = CreateLoginErrorPacket("Login failed.");
+                await clientHandler.Stream.WriteAsync(loginError, 0, loginError.Length);
+                  await Task.Delay(1000);
+                clientHandler.TcpClient.Close();
+            }
         }
         
         private async Task HandleSqlBatch(MssqlClientHandler clientHandler, byte[] data)
@@ -701,6 +750,59 @@ namespace RevTun
             payload.AddRange(BitConverter.GetBytes((ushort)0x0000)); // CurCmd
             payload.AddRange(BitConverter.GetBytes((uint)0x00000000)); // RowCount
             
+            var totalLength = (ushort)(8 + payload.Count);
+            var header = TdsProtocol.CreateTdsHeader(TdsProtocol.TABULAR_RESULT, TdsProtocol.STATUS_EOM, totalLength, 0, 1, 0);
+            
+            var packet = new byte[totalLength];
+            Array.Copy(header, 0, packet, 0, 8);
+            Array.Copy(payload.ToArray(), 0, packet, 8, payload.Count);
+            
+            return packet;
+        }
+        
+        private byte[] CreateLoginErrorPacket(string errorMessage)
+        {
+            var payload = new List<byte>();
+            
+            // Token: ERROR (0xAA)
+            payload.Add(0xAA);
+            
+            // Length of the error info (excluding token)
+            var errorInfo = new List<byte>();
+            
+            // Error number (4 bytes) - Login Failed (18456)
+            errorInfo.AddRange(BitConverter.GetBytes((uint)18456));
+            
+            // State (1 byte)
+            errorInfo.Add(0x01);
+            
+            // Severity (1 byte) - 14 = Error that can be corrected by user  
+            errorInfo.Add(0x0E);
+            
+            // Error message length (2 bytes)
+            errorInfo.AddRange(BitConverter.GetBytes((ushort)errorMessage.Length));
+            
+            // Error message (Unicode)
+            errorInfo.AddRange(Encoding.Unicode.GetBytes(errorMessage));
+            
+            // Server name length (1 byte)
+            var serverName = Environment.MachineName;
+            errorInfo.Add((byte)serverName.Length);
+            
+            // Server name (ASCII)
+            errorInfo.AddRange(Encoding.ASCII.GetBytes(serverName));
+            
+            // Procedure name length (1 byte) - empty
+            errorInfo.Add(0x00);
+            
+            // Line number (4 bytes)
+            errorInfo.AddRange(BitConverter.GetBytes((uint)1));
+            
+            // Add length of error info
+            payload.AddRange(BitConverter.GetBytes((ushort)errorInfo.Count));
+            payload.AddRange(errorInfo);
+            
+            // Create TDS packet
             var totalLength = (ushort)(8 + payload.Count);
             var header = TdsProtocol.CreateTdsHeader(TdsProtocol.TABULAR_RESULT, TdsProtocol.STATUS_EOM, totalLength, 0, 1, 0);
             
@@ -795,28 +897,105 @@ namespace RevTun
                 return new byte[0];
             }
         }
-        
-        private X509Certificate2 CreateSelfSignedCertificate()
+          private X509Certificate2 CreateSelfSignedCertificate()
         {
-            // For tunnel purposes, create a simple self-signed certificate
-            // In production, you would use a proper certificate
+            // Create a certificate that mimics a legitimate MSSQL server certificate
             try
             {
-                // Try to create a minimal self-signed certificate using RSA
                 using (var rsa = System.Security.Cryptography.RSA.Create(2048))
                 {
+                    // Use the machine name as the certificate subject (standard MSSQL behavior)
+                    var hostname = Environment.MachineName;
+                    var subject = $"CN={hostname}";
+                    
                     var req = new System.Security.Cryptography.X509Certificates.CertificateRequest(
-                        "CN=RevTun-MSSQL-Server", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256,
+                        subject, rsa, System.Security.Cryptography.HashAlgorithmName.SHA256,
                         System.Security.Cryptography.RSASignaturePadding.Pkcs1);
                     
-                    var cert = req.CreateSelfSigned(DateTimeOffset.Now.AddDays(-1), DateTimeOffset.Now.AddYears(1));
+                    // Add standard extensions found in MSSQL server certificates
+                    req.CertificateExtensions.Add(
+                        new X509KeyUsageExtension(
+                            X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, 
+                            false));
+                    
+                    req.CertificateExtensions.Add(
+                        new X509EnhancedKeyUsageExtension(
+                            new OidCollection { 
+                                new Oid("1.3.6.1.5.5.7.3.1"), // Server Authentication
+                                new Oid("1.3.6.1.5.5.7.3.2")  // Client Authentication (common in MSSQL)
+                            }, 
+                            false));
+                    
+                    // Add Subject Alternative Names (SAN) like real MSSQL certificates
+                    var san = new SubjectAlternativeNameBuilder();
+                    san.AddDnsName(hostname);
+                    san.AddDnsName(hostname.ToLower());
+                    try
+                    {
+                        // Try to add FQDN if we can determine the domain
+                        if (!string.IsNullOrEmpty(Environment.UserDomainName) && 
+                            !Environment.UserDomainName.Equals("WORKGROUP", StringComparison.OrdinalIgnoreCase))
+                        {
+                            san.AddDnsName($"{hostname}.{Environment.UserDomainName}".ToLower());
+                        }
+                    }
+                    catch { /* Ignore domain lookup failures */ }
+                    
+                    san.AddIpAddress(IPAddress.Loopback);
+                    req.CertificateExtensions.Add(san.Build());
+                    
+                    // Set validity period typical for enterprise certificates
+                    var cert = req.CreateSelfSigned(DateTimeOffset.Now.AddDays(-30), DateTimeOffset.Now.AddYears(2));
+                    
                     return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string)null, X509KeyStorageFlags.Exportable);
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to create self-signed certificate: {ex.Message}");
-                throw;
+                return null;
+            }
+        }
+        
+        private string GetTdsMessageTypeName(byte type)
+        {
+            switch (type)
+            {
+                case TdsProtocol.PRE_LOGIN:
+                    return "PRE_LOGIN";
+                case TdsProtocol.TDS7_LOGIN:
+                    return "TDS7_LOGIN";
+                case TdsProtocol.SQL_BATCH:
+                    return "SQL_BATCH";
+                case TdsProtocol.TABULAR_RESULT:
+                    return "TABULAR_RESULT";
+                case TunnelProtocol.TUNNEL_CONNECT:
+                    return "TUNNEL_CONNECT";
+                case TunnelProtocol.TUNNEL_DATA:
+                    return "TUNNEL_DATA";
+                case TunnelProtocol.TUNNEL_DISCONNECT:
+                    return "TUNNEL_DISCONNECT";
+                case TunnelProtocol.TUNNEL_CONNECT_ACK:
+                    return "TUNNEL_CONNECT_ACK";
+                default:
+                    return $"UNKNOWN(0x{type:X2})";
+            }
+        }
+        
+        private string GetEncryptionName(byte encryption)
+        {
+            switch (encryption)
+            {
+                case TdsProtocol.ENCRYPT_NOT_SUP:
+                    return "NOT_SUPPORTED";
+                case TdsProtocol.ENCRYPT_OFF:
+                    return "OFF";
+                case TdsProtocol.ENCRYPT_ON:
+                    return "ON";
+                case TdsProtocol.ENCRYPT_REQ:
+                    return "REQUIRED";
+                default:
+                    return $"UNKNOWN(0x{encryption:X2})";
             }
         }
     }

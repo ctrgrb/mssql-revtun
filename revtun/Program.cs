@@ -63,7 +63,7 @@ namespace RevTun
         }
           static void PrintHelp()
         {
-            Console.WriteLine("RevTun - MSSQL Reverse Tunnel");
+            Console.WriteLine("MSSQL Tunneling Tool");
             Console.WriteLine("==============================");
             Console.WriteLine();
             Console.WriteLine("SERVER OPTIONS:");
@@ -73,16 +73,16 @@ namespace RevTun
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
             Console.WriteLine("  --require-encryption       Require TLS encryption for all connections");
             Console.WriteLine("  --no-encryption            Disable TLS encryption support");
-            Console.WriteLine();
-            Console.WriteLine("CLIENT OPTIONS:");
+            Console.WriteLine();            Console.WriteLine("CLIENT OPTIONS:");
             Console.WriteLine("  --host, -h <hostname>      Server hostname (default: localhost)");
             Console.WriteLine("  --port, -p <port>          Server port (default: 1433)");
             Console.WriteLine("  --username, -u <user>      SQL username (default: sa)");
-            Console.WriteLine("  --password <pass>          SQL password (default: Password123)");
+            Console.WriteLine("  --password <pass>          Password for authentication (REQUIRED)");
             Console.WriteLine("  --database, -d <db>        Database name (default: master)");            Console.WriteLine("  --auto-exit                Exit after connection test");
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
             Console.WriteLine("  --debug                    Enable debug output (shows all messages)");
-            Console.WriteLine("  --encrypt                  Request TLS encryption");            Console.WriteLine("  --require-encryption       Require TLS encryption (fail if not supported)");
+            Console.WriteLine("  --encrypt                  Request TLS encryption (default: enabled)");
+            Console.WriteLine("  --no-encrypt               Disable TLS encryption");            Console.WriteLine("  --require-encryption       Require TLS encryption (fail if not supported)");
             Console.WriteLine();
             Console.WriteLine("RELAY OPTIONS:");
             Console.WriteLine("  --port, -p <port>          Relay listener port (default: 1433)");
@@ -115,9 +115,16 @@ namespace RevTun
             Console.WriteLine();
             Console.WriteLine("  # Relay with verbose logging on custom port");
             Console.WriteLine("  revtun relay --port 1435 --host server.example.com --verbose");
-        }static async Task StartServer(string[] args)
+        }        static async Task StartServer(string[] args)
         {
             var options = ParseServerOptions(args);
+            
+            // Validate that password is provided
+            if (string.IsNullOrEmpty(options.Password))
+            {
+                Console.WriteLine("Error: Password is required for server authentication. Use --password <password>");
+                Environment.Exit(1);
+            }
             
             Console.WriteLine("\n=== Starting MSSQL Server ===");
             Console.WriteLine($"MSSQL Port: {options.Port}");
@@ -141,9 +148,16 @@ namespace RevTun
             };
             
             await server.StartAsync();
-        }          static async Task StartClient(string[] args)
+        }        static async Task StartClient(string[] args)
         {
             var options = ParseClientOptions(args);
+            
+            // Validate that password is provided
+            if (string.IsNullOrEmpty(options.Password))
+            {
+                Console.WriteLine("Error: Password is required for client connection. Use --password <password>");
+                Environment.Exit(1);
+            }
             
             if (options.Debug)
             {
@@ -205,10 +219,16 @@ namespace RevTun
                     case "--require-encryption":
                         options.RequireEncryption = true;
                         options.SupportEncryption = true;
-                        break;
-                    case "--no-encryption":
+                        break;                    case "--no-encryption":
                         options.SupportEncryption = false;
                         options.RequireEncryption = false;
+                        break;
+                    case "--password":
+                        if (i + 1 < args.Length)
+                        {
+                            options.Password = args[i + 1];
+                            i++;
+                        }
                         break;
                 }
             }
@@ -270,9 +290,12 @@ namespace RevTun
                         break;                    case "--debug":
                         options.Debug = true;
                         options.Verbose = true; // Debug mode implies verbose mode
-                        break;
-                    case "--encrypt":
+                        break;                    case "--encrypt":
                         options.RequestEncryption = true;
+                        break;
+                    case "--no-encrypt":
+                        options.RequestEncryption = false;
+                        options.RequireEncryption = false;
                         break;
                     case "--require-encryption":
                         options.RequireEncryption = true;
@@ -368,17 +391,18 @@ namespace RevTun
         public bool Verbose { get; set; } = false;
         public bool RequireEncryption { get; set; } = false;
         public bool SupportEncryption { get; set; } = true;
+        public string Password { get; set; } = ""; // Server password for authentication
     }    public class ClientOptions
     {
         public string Host { get; set; } = "localhost";
         public int Port { get; set; } = 1433;
         public string Username { get; set; } = "sa";
-        public string Password { get; set; } = "Password123";
+        public string Password { get; set; } = ""; // No default password - must be provided
         public string Database { get; set; } = "master";
         public bool AutoExit { get; set; } = false;
         public bool Verbose { get; set; } = false;
         public bool Debug { get; set; } = false;
-        public bool RequestEncryption { get; set; } = false;
+        public bool RequestEncryption { get; set; } = true; // Enable encryption by default
         public bool RequireEncryption { get; set; } = false;
     }
 }

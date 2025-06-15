@@ -66,32 +66,30 @@ namespace RevTun
         public const byte ENCRYPT_REQ = 0x03;        // Encryption required
           public static byte[] CreatePreLoginPacket(byte encryptionMode = ENCRYPT_ON)
         {
-            var payload = new List<byte>();
-            
-            // Pre-login options
+            var payload = new List<byte>();            // Pre-login options
             // Version option
             payload.Add(0x00); // Version option
-            payload.AddRange(BitConverter.GetBytes((ushort)0x001A)); // Offset
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0006)); // Length
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0022)); // Offset (8 + 26 = 34)
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0006)); // Length (6 bytes)
             
-            // Encryption option
+            // Encryption option  
             payload.Add(0x01); // Encryption option
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0020)); // Offset
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0001)); // Length
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0028)); // Offset (34 + 6 = 40)
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0001)); // Length (1 byte)
             
             // Instance option
             payload.Add(0x02); // Instance option
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0021)); // Offset
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0000)); // Length
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0029)); // Offset (40 + 1 = 41)
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0000)); // Length (0 bytes)
             
             // Thread ID option
             payload.Add(0x03); // Thread ID option
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0021)); // Offset
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0004)); // Length
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0029)); // Offset (41, same as instance)
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0004)); // Length (4 bytes)
               // Mars option
             payload.Add(0x04); // Mars option
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0025)); // Offset
-            payload.AddRange(BitConverter.GetBytes((ushort)0x0001)); // Length
+            payload.AddRange(BitConverter.GetBytes((ushort)0x002D)); // Offset (41 + 4 = 45)
+            payload.AddRange(BitConverter.GetBytes((ushort)0x0001)); // Length (1 byte)
             
             // Terminator
             payload.Add(0xFF);
@@ -117,7 +115,7 @@ namespace RevTun
             return packet;
         }
         
-        public static byte[] CreateLoginPacket(string server, string database, string username, string password)
+        public static byte[] CreateLoginPacket(string server, string database, string username, string password, bool debug = false)
         {
             var payload = new List<byte>();
             
@@ -153,10 +151,9 @@ namespace RevTun
             payload.AddRange(BitConverter.GetBytes((ushort)currentOffset));
             payload.AddRange(BitConverter.GetBytes((ushort)password.Length));
             currentOffset += password.Length * 2;
-            
-            // App name
+              // App name
             payload.AddRange(BitConverter.GetBytes((ushort)currentOffset));
-            var appName = "RevTun";
+            var appName = GetRandomApplicationName();
             payload.AddRange(BitConverter.GetBytes((ushort)appName.Length));
             currentOffset += appName.Length * 2;
             
@@ -168,10 +165,9 @@ namespace RevTun
             // Unused
             payload.AddRange(BitConverter.GetBytes((ushort)0));
             payload.AddRange(BitConverter.GetBytes((ushort)0));
-            
-            // Library name
+              // Library name
             payload.AddRange(BitConverter.GetBytes((ushort)currentOffset));
-            var libName = "RevTun-TDS";
+            var libName = GetRandomLibraryName();
             payload.AddRange(BitConverter.GetBytes((ushort)libName.Length));
             currentOffset += libName.Length * 2;
             
@@ -186,7 +182,7 @@ namespace RevTun
             // Add variable data
             payload.AddRange(Encoding.Unicode.GetBytes(hostname));
             payload.AddRange(Encoding.Unicode.GetBytes(username));
-            payload.AddRange(EncodePassword(password));
+            payload.AddRange(EncodePassword(password, debug));
             payload.AddRange(Encoding.Unicode.GetBytes(appName));
             payload.AddRange(Encoding.Unicode.GetBytes(server));
             payload.AddRange(Encoding.Unicode.GetBytes(libName));
@@ -200,21 +196,35 @@ namespace RevTun
             Array.Copy(payload.ToArray(), 0, packet, 8, payload.Count);
             
             return packet;
-        }
-        
-        private static byte[] EncodePassword(string password)
+        }          private static byte[] EncodePassword(string password, bool debug = false)
         {
+            if (debug)
+            {
+                Console.WriteLine($"DEBUG: Encoding password: '{password}'");
+            }
             var encoded = new byte[password.Length * 2];
             var passwordBytes = Encoding.Unicode.GetBytes(password);
             
-            for (int i = 0; i < passwordBytes.Length; i++)
+            if (debug)
+            {
+                Console.WriteLine($"DEBUG: Password Unicode bytes: {string.Join(" ", passwordBytes.Select(b => $"{b:X2}"))}");
+            }for (int i = 0; i < passwordBytes.Length; i++)
             {
                 // XOR with 0xA5 and swap nibbles
-                byte b = passwordBytes[i];
-                b ^= 0xA5;
-                encoded[i] = (byte)(((b & 0x0F) << 4) | ((b & 0xF0) >> 4));
+                byte original = passwordBytes[i];                byte xored = (byte)(original ^ 0xA5);
+                byte swapped = (byte)(((xored & 0x0F) << 4) | ((xored & 0xF0) >> 4));
+                encoded[i] = swapped;
+                
+                if (debug)
+                {
+                    Console.WriteLine($"DEBUG: Encode byte {i}: {original:X2} -> {xored:X2} -> {swapped:X2}");
+                }
             }
             
+            if (debug)
+            {
+                Console.WriteLine($"DEBUG: Final encoded bytes: {string.Join(" ", encoded.Select(b => $"{b:X2}"))}");
+            }
             return encoded;
         }
         
@@ -288,55 +298,333 @@ namespace RevTun
             Array.Copy(header, 0, packet, 0, 8);
             Array.Copy(payload.ToArray(), 0, packet, 8, payload.Count);
             
-            return packet;
-        }
-        
-        public static byte ParsePreLoginEncryption(byte[] packet)
+            return packet;        }        public static byte ParsePreLoginEncryption(byte[] packet, bool debug = false)
         {
-            if (packet.Length < 8)
-                return ENCRYPT_OFF;
+            if (debug)
+            {
+                Console.WriteLine($"***DEBUG: ParsePreLoginEncryption called with packet length {packet.Length}");
+            }
             
-            try
+            if (packet.Length < 8)
+            {
+                if (debug)
+                {
+                    Console.WriteLine("***DEBUG: Packet too short, returning ENCRYPT_OFF");
+                }
+                return ENCRYPT_OFF;
+            }
+              try
             {
                 // Skip TDS header (8 bytes)
                 var offset = 8;
+                
+                if (debug)
+                {
+                    Console.WriteLine($"DEBUG: Parsing Pre-Login packet, length={packet.Length}");
+                }
                 
                 // Parse pre-login options
                 while (offset < packet.Length)
                 {
                     if (packet[offset] == 0xFF) // Terminator
-                        break;
-                        
-                    if (packet[offset] == 0x01) // Encryption option
                     {
-                        // Read offset (next 2 bytes)
-                        if (offset + 2 < packet.Length)
+                        if (debug)
                         {
-                            var encOffset = BitConverter.ToUInt16(packet, offset + 1);
-                            // Read length (next 2 bytes) 
-                            if (offset + 4 < packet.Length)
-                            {
-                                var encLength = BitConverter.ToUInt16(packet, offset + 3);
-                                // Get encryption value
-                                if (encOffset < packet.Length && encLength > 0)
-                                {
-                                    return packet[encOffset];
-                                }
-                            }
+                            Console.WriteLine($"DEBUG: Found terminator at offset {offset}");
                         }
                         break;
+                    }
+                          if (packet[offset] == 0x01) // Encryption option
+                    {
+                        if (debug)
+                        {
+                            Console.WriteLine($"DEBUG: Found encryption option at offset {offset}");
+                        }
+                        // Read offset (next 2 bytes)
+                        if (offset + 4 < packet.Length)
+                        {
+                            var encOffset = BitConverter.ToUInt16(packet, offset + 1);
+                            var encLength = BitConverter.ToUInt16(packet, offset + 3);
+                            if (debug)
+                            {
+                                Console.WriteLine($"DEBUG: Encryption data at offset {encOffset}, length {encLength}");
+                                Console.WriteLine($"DEBUG: Packet bytes around offset {encOffset}: {string.Join(" ", packet.Skip(Math.Max(0, encOffset-2)).Take(6).Select(b => $"{b:X2}"))}");
+                            }
+                            
+                            // Get encryption value - offset is from start of TDS packet
+                            if (encOffset < packet.Length && encLength > 0)
+                            {
+                                var encValue = packet[encOffset];
+                                if (debug)
+                                {
+                                    Console.WriteLine($"DEBUG: Encryption value = 0x{encValue:X2}");
+                                }
+                                return encValue;
+                            }
+                        }
+                        break;                    }
+                    
+                    if (debug)
+                    {
+                        Console.WriteLine($"DEBUG: Option at offset {offset}: 0x{packet[offset]:X2}");
                     }
                     
                     // Skip to next option (1 byte type + 2 bytes offset + 2 bytes length)
                     offset += 5;
+                }            }
+            catch (Exception ex)
+            {
+                if (debug)
+                {
+                    Console.WriteLine($"DEBUG: Exception parsing encryption: {ex.Message}");
                 }
             }
-            catch
+            
+            if (debug)
             {
-                // If parsing fails, assume no encryption
+                Console.WriteLine("DEBUG: Returning ENCRYPT_OFF as fallback");
+            }
+            return ENCRYPT_OFF;
+        }
+        
+        // Static lists for randomizing identifiers to avoid IOCs
+        private static readonly string[] ApplicationNames = {
+            "Microsoft SQL Server Management Studio - Query",
+            "Microsoft SQL Server Management Studio",
+            "SQLCMD",
+            "SqlPackage",
+            "Microsoft Visual Studio",
+            "Entity Framework Core",
+            "System.Data.SqlClient",
+            "Microsoft.Data.SqlClient", 
+            "SQL Server Reporting Services",
+            "SQL Server Integration Services",
+            "PowerBI Desktop",
+            "Crystal Reports",
+            "Tableau Desktop",
+            "Microsoft Excel",
+            "Microsoft Access"
+        };
+
+        private static readonly string[] LibraryNames = {
+            "ODBC Driver 17 for SQL Server",
+            "ODBC Driver 18 for SQL Server", 
+            "Microsoft OLE DB Driver for SQL Server",
+            "SQL Server Native Client 11.0",
+            "SQL Server Native Client 10.0",
+            "Microsoft.Data.SqlClient",
+            "System.Data.SqlClient",
+            "Microsoft SQL Server JDBC Driver",
+            "jTDS Type 4 JDBC Driver for SQL Server",
+            "SQL Server PDO Driver",
+            "pymssql",
+            "pyodbc"
+        };
+
+        private static readonly string[] CommonUsernames = {
+            "sa", "admin", "administrator", "sqluser", "dbuser", "webapp", "service", 
+            "application", "reporting", "readonly", "datawriter", "datareader", 
+            "backup", "maintenance", "monitor", "analytics", "integration", "etl"
+        };
+
+        private static readonly string[] CommonDatabases = {
+            "master", "msdb", "tempdb", "model", "AdventureWorks", "Northwind", 
+            "Production", "Staging", "Development", "Test", "Analytics", "Reporting", 
+            "Warehouse", "Inventory", "Sales", "CRM", "ERP", "Finance", "HR", "Audit"
+        };
+
+        private static readonly Random _random = new Random();
+        private static int _rotationCounter = 0;
+
+        public static string GetRandomApplicationName()
+        {
+            return ApplicationNames[_random.Next(ApplicationNames.Length)];
+        }
+
+        public static string GetRandomLibraryName()
+        {
+            return LibraryNames[_random.Next(LibraryNames.Length)];
+        }
+
+        public static string GetRotatingUsername()
+        {
+            // Oscillate through usernames to create realistic traffic patterns
+            var username = CommonUsernames[_rotationCounter % CommonUsernames.Length];
+            _rotationCounter++;
+            return username;
+        }
+
+        public static string GetRotatingDatabase()
+        {
+            // Oscillate through databases to create realistic traffic patterns  
+            var database = CommonDatabases[_rotationCounter % CommonDatabases.Length];
+            return database;
+        }
+
+        // Parse TDS7 Login packet to extract credentials
+        public static LoginInfo ParseLoginPacket(byte[] data)
+        {
+            if (data.Length < 8)
+                throw new ArgumentException("Invalid login packet - too short");
+
+            var loginInfo = new LoginInfo();
+            
+            try
+            {
+                // Skip TDS header (8 bytes) and get to login data
+                var loginData = new byte[data.Length - 8];
+                Array.Copy(data, 8, loginData, 0, loginData.Length);
+                  if (loginData.Length < 0x5C) // Minimum size for fixed portion
+                    throw new ArgumentException("Invalid login packet - fixed portion too short");
+                
+                Console.WriteLine($"DEBUG: Login data length: {loginData.Length}");
+                Console.WriteLine($"DEBUG: Login packet first 120 bytes:");
+                for (int i = 0; i < Math.Min(120, loginData.Length); i += 16)
+                {
+                    var line = string.Join(" ", loginData.Skip(i).Take(16).Select(b => $"{b:X2}"));
+                    Console.WriteLine($"  {i:X2}: {line}");
+                }
+                  // Search for password pattern in entire packet
+                var targetPattern = new byte[] { 0x4C, 0x5A, 0x6D, 0x5A, 0x1C, 0x5A };
+                int foundPatternOffset = -1;
+                for (int i = 0; i <= loginData.Length - targetPattern.Length; i++)
+                {
+                    bool match = true;
+                    for (int j = 0; j < targetPattern.Length; j++)
+                    {
+                        if (loginData[i + j] != targetPattern[j])
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match)
+                    {
+                        Console.WriteLine($"DEBUG: Found password pattern at offset {i} (0x{i:X2})");
+                        foundPatternOffset = i;
+                        break;
+                    }
+                }
+                  // Extract variable portion offsets from fixed portion
+                // Note: offsets in TDS packet are relative to start of entire packet, we need to adjust for loginData
+                  // Hostname offset and length
+                var hostnameOffset = BitConverter.ToUInt16(loginData, 0x24) - 8;
+                var hostnameLength = BitConverter.ToUInt16(loginData, 0x26);
+                
+                // Username offset and length  
+                var usernameOffset = BitConverter.ToUInt16(loginData, 0x28) - 8;
+                var usernameLength = BitConverter.ToUInt16(loginData, 0x2A);
+                  // Password offset and length
+                var passwordOffset = BitConverter.ToUInt16(loginData, 0x2C); // Don't subtract 8 here
+                var passwordLength = BitConverter.ToUInt16(loginData, 0x2E);
+                
+                Console.WriteLine($"DEBUG: Password offset (raw): {passwordOffset}, length: {passwordLength}");
+                
+                // The offset is relative to the start of the TDS packet, so we need to 
+                // subtract 8 to get the offset within loginData
+                var adjustedPasswordOffset = passwordOffset - 8;
+                  // Debug password extraction
+                if (passwordLength > 0 && adjustedPasswordOffset >= 0)
+                {
+                    Console.WriteLine($"DEBUG: Adjusted password offset: {adjustedPasswordOffset}");
+                    if (adjustedPasswordOffset + passwordLength * 2 <= loginData.Length)
+                    {
+                        var bytesAtOffset = loginData.Skip(adjustedPasswordOffset).Take(passwordLength * 2).Select(b => $"{b:X2}");
+                        Console.WriteLine($"DEBUG: Bytes at adjusted offset: {string.Join(" ", bytesAtOffset)}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("DEBUG: Adjusted offset out of bounds");
+                    }                }
+                
+                // Also check what the pattern search found
+                if (foundPatternOffset >= 0)
+                {
+                    Console.WriteLine($"DEBUG: Pattern found at offset {foundPatternOffset}, but calculated offset is {adjustedPasswordOffset}");
+                    Console.WriteLine($"DEBUG: Difference: {adjustedPasswordOffset - foundPatternOffset}");
+                    
+                    // Use the found pattern offset instead of calculated offset if they differ
+                    if (foundPatternOffset != adjustedPasswordOffset)
+                    {
+                        Console.WriteLine($"DEBUG: Using found pattern offset {foundPatternOffset} instead of calculated {adjustedPasswordOffset}");
+                        adjustedPasswordOffset = foundPatternOffset;
+                    }
+                }
+                
+                // Application name offset and length
+                var appNameOffset = BitConverter.ToUInt16(loginData, 0x30) - 8;
+                var appNameLength = BitConverter.ToUInt16(loginData, 0x32);
+                
+                // Server name offset and length
+                var serverNameOffset = BitConverter.ToUInt16(loginData, 0x34) - 8;
+                var serverNameLength = BitConverter.ToUInt16(loginData, 0x36);
+                
+                // Library name offset and length
+                var libNameOffset = BitConverter.ToUInt16(loginData, 0x3C) - 8;
+                var libNameLength = BitConverter.ToUInt16(loginData, 0x3E);
+                
+                // Database offset and length
+                var databaseOffset = BitConverter.ToUInt16(loginData, 0x44) - 8;
+                var databaseLength = BitConverter.ToUInt16(loginData, 0x46);
+                
+                // Extract strings from variable portion
+                if (usernameLength > 0 && usernameOffset + usernameLength * 2 <= loginData.Length)
+                {
+                    loginInfo.Username = Encoding.Unicode.GetString(loginData, usernameOffset, usernameLength * 2);
+                }
+                  if (passwordLength > 0 && adjustedPasswordOffset + passwordLength * 2 <= loginData.Length)
+                {
+                    // SQL Server passwords are XOR encrypted with 0xA5 and nibbles swapped
+                    var passwordBytes = new byte[passwordLength * 2];
+                    Array.Copy(loginData, adjustedPasswordOffset, passwordBytes, 0, passwordLength * 2);
+                    
+                    Console.WriteLine($"DEBUG: Password raw bytes: {string.Join(" ", passwordBytes.Select(b => $"{b:X2}"))}");
+                    
+                    for (int i = 0; i < passwordBytes.Length; i++)
+                    {
+                        // Swap nibbles first, then XOR with 0xA5
+                        byte original = passwordBytes[i];
+                        byte swapped = (byte)(((original & 0x0F) << 4) | ((original & 0xF0) >> 4));
+                        byte decoded = (byte)(swapped ^ 0xA5);
+                        passwordBytes[i] = decoded;
+                        
+                        Console.WriteLine($"DEBUG: Byte {i}: {original:X2} -> {swapped:X2} -> {decoded:X2}");
+                    }
+                    
+                    loginInfo.Password = Encoding.Unicode.GetString(passwordBytes);
+                    Console.WriteLine($"DEBUG: Decoded password: '{loginInfo.Password}'");
+                }
+                
+                if (databaseLength > 0 && databaseOffset + databaseLength * 2 <= loginData.Length)
+                {
+                    loginInfo.Database = Encoding.Unicode.GetString(loginData, databaseOffset, databaseLength * 2);
+                }
+                
+                if (appNameLength > 0 && appNameOffset + appNameLength * 2 <= loginData.Length)
+                {
+                    loginInfo.ApplicationName = Encoding.Unicode.GetString(loginData, appNameOffset, appNameLength * 2);
+                }
+                
+                if (libNameLength > 0 && libNameOffset + libNameLength * 2 <= loginData.Length)
+                {
+                    loginInfo.LibraryName = Encoding.Unicode.GetString(loginData, libNameOffset, libNameLength * 2);
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException($"Failed to parse login packet: {ex.Message}");
             }
             
-            return ENCRYPT_OFF;
+            return loginInfo;
+        }
+
+        public class LoginInfo
+        {
+            public string Username { get; set; } = "";
+            public string Password { get; set; } = "";
+            public string Database { get; set; } = "";
+            public string ApplicationName { get; set; } = "";
+            public string LibraryName { get; set; } = "";
         }
     }
     

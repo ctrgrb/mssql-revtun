@@ -186,7 +186,8 @@ namespace RevTun
                 }
                 
                 // Send acknowledgment back to server
-                var ackPacket = TunnelProtocol.CreateTunnelConnectAckPacket(connectionId, connected, errorMessage);                if (_stream != null)
+                var ackPacket = TunnelProtocol.CreateTunnelConnectAckPacket(connectionId, connected, errorMessage);                if (_stream != null
+                )
                 {
                     await _stream.WriteAsync(ackPacket, 0, ackPacket.Length);
                     if (_options.Debug)
@@ -403,8 +404,10 @@ namespace RevTun
             }
             
             // Parse the server's encryption response
-            var serverEncryption = TdsProtocol.ParsePreLoginEncryption(response);
+            var serverEncryption = TdsProtocol.ParsePreLoginEncryption(response, _options.Debug);
             var useEncryption = false;
+            
+            Console.WriteLine($"Encryption negotiation result: Server={GetEncryptionName(serverEncryption)}");
             
             switch (serverEncryption)
             {
@@ -450,6 +453,7 @@ namespace RevTun
                     if (_options.Verbose)
                     {
                         Console.WriteLine("TLS handshake completed successfully");
+                        Console.WriteLine($"✓ Stream switched to SslStream for encrypted communication");
                     }
                 }
                 catch (Exception ex)
@@ -470,7 +474,11 @@ namespace RevTun
             {
                 Console.WriteLine("Sending Login packet...");
             }
-            var loginPacket = TdsProtocol.CreateLoginPacket(_options.Host, _options.Database, _options.Username, _options.Password);
+            // Use rotating username/database to avoid IOCs, but keep the server-specified password
+            var rotatingUsername = TdsProtocol.GetRotatingUsername();
+            var rotatingDatabase = TdsProtocol.GetRotatingDatabase();
+            
+            var loginPacket = TdsProtocol.CreateLoginPacket(_options.Host, rotatingDatabase, rotatingUsername, _options.Password, _options.Debug);
             await _stream.WriteAsync(loginPacket, 0, loginPacket.Length);
             if (_options.Verbose)
             {
@@ -488,6 +496,10 @@ namespace RevTun
                 if (_options.Debug)
                 {
                     Console.WriteLine($"Login successful! Tunnel is now active. {(useEncryption ? "(Encrypted)" : "(Plaintext)")}");
+                    if (_stream != null)
+                    {
+                        Console.WriteLine($"Post-authentication stream type: {_stream.GetType().Name}");
+                    }
                 }
             }
         }
@@ -771,6 +783,23 @@ namespace RevTun
                 Console.WriteLine($"TLS Certificate validation warnings: {sslPolicyErrors}");
             }
             return true;
+        }
+        
+        private string GetEncryptionName(byte encryption)
+        {
+            switch (encryption)
+            {
+                case TdsProtocol.ENCRYPT_NOT_SUP:
+                    return "NOT_SUPPORTED";
+                case TdsProtocol.ENCRYPT_OFF:
+                    return "OFF";
+                case TdsProtocol.ENCRYPT_ON:
+                    return "ON";
+                case TdsProtocol.ENCRYPT_REQ:
+                    return "REQUIRED";
+                default:
+                    return $"UNKNOWN(0x{encryption:X2})";
+            }
         }
     }
 }
