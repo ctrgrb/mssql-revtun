@@ -247,5 +247,20 @@ namespace RevTun
             Console.WriteLine("   - Timeout scenarios");
             Console.WriteLine();
         }
+        
+        public static void PrintRelayInfo()
+        {
+            Console.WriteLine("RELAY MODE: Transparently forwards MSSQL traffic between client and server");
+            Console.WriteLine("Use this mode to intercept, log, or modify MSSQL communications");
+            Console.WriteLine("The relay maintains the TDS protocol appearance while providing visibility");
+            Console.WriteLine();
+        }
+        
+        public static void PrintRelayStatus(int activeConnections, string serverTarget)
+        {
+            Console.WriteLine($"Relay Status: {activeConnections} active connections");
+            Console.WriteLine($"Target Server: {serverTarget}");
+            Console.WriteLine("All traffic appears as legitimate MSSQL communication");
+        }
     }
 }

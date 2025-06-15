@@ -15,9 +15,7 @@ namespace RevTun
             {
                 PrintUsage();
                 return;
-            }
-
-            var command = args[0].ToLower();
+            }            var command = args[0].ToLower();
               switch (command)
             {
                 case "server":
@@ -27,6 +25,10 @@ namespace RevTun
                 case "client":
                 case "c":
                     await StartClient(args);
+                    break;
+                case "relay":
+                case "r":
+                    await StartRelay(args);
                     break;
                 case "help":
                 case "h":
@@ -48,11 +50,12 @@ namespace RevTun
             Console.WriteLine();            Console.WriteLine("Commands:");
             Console.WriteLine("  server, s      Start MSSQL server (listens on port 1433)");
             Console.WriteLine("  client, c      Start MSSQL client (connects to server)");
+            Console.WriteLine("  relay, r       Start MSSQL relay (forwards between client and server)");
             Console.WriteLine("  help, h        Show detailed help");
-            Console.WriteLine();
-            Console.WriteLine("Examples:");
+            Console.WriteLine();            Console.WriteLine("Examples:");
             Console.WriteLine("  revtun server");
             Console.WriteLine("  revtun client");
+            Console.WriteLine("  revtun relay --host server.example.com");
             Console.WriteLine("  revtun server --port 1433 --proxy-port 1080");
             Console.WriteLine("  revtun client --host localhost --port 1433");
             Console.WriteLine();
@@ -79,8 +82,15 @@ namespace RevTun
             Console.WriteLine("  --database, -d <db>        Database name (default: master)");            Console.WriteLine("  --auto-exit                Exit after connection test");
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
             Console.WriteLine("  --debug                    Enable debug output (shows all messages)");
-            Console.WriteLine("  --encrypt                  Request TLS encryption");
-            Console.WriteLine("  --require-encryption       Require TLS encryption (fail if not supported)");
+            Console.WriteLine("  --encrypt                  Request TLS encryption");            Console.WriteLine("  --require-encryption       Require TLS encryption (fail if not supported)");
+            Console.WriteLine();
+            Console.WriteLine("RELAY OPTIONS:");
+            Console.WriteLine("  --port, -p <port>          Relay listener port (default: 1433)");
+            Console.WriteLine("  --bind <address>           Bind address (default: 0.0.0.0)");
+            Console.WriteLine("  --host, -h <hostname>      Target server hostname (default: localhost)");
+            Console.WriteLine("  --server-port <port>       Target server port (default: 1433)");
+            Console.WriteLine("  --verbose, -v              Enable verbose logging");
+            Console.WriteLine("  --debug                    Enable debug output (shows TDS packet details)");
             Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
             Console.WriteLine("  # Start server on custom port");
@@ -97,10 +107,15 @@ namespace RevTun
             Console.WriteLine();
             Console.WriteLine("  # Server requiring encryption");
             Console.WriteLine("  revtun server --require-encryption");
-            Console.WriteLine();
-            Console.WriteLine("  # Client with custom credentials");
+            Console.WriteLine();            Console.WriteLine("  # Client with custom credentials");
             Console.WriteLine("  revtun client --username admin --password secret --database mydb");
-        }        static async Task StartServer(string[] args)
+            Console.WriteLine();
+            Console.WriteLine("  # Start relay forwarding to remote server");
+            Console.WriteLine("  revtun relay --host 192.168.1.100 --server-port 1433");
+            Console.WriteLine();
+            Console.WriteLine("  # Relay with verbose logging on custom port");
+            Console.WriteLine("  revtun relay --port 1435 --host server.example.com --verbose");
+        }static async Task StartServer(string[] args)
         {
             var options = ParseServerOptions(args);
             
@@ -262,6 +277,82 @@ namespace RevTun
                     case "--require-encryption":
                         options.RequireEncryption = true;
                         options.RequestEncryption = true;
+                        break;
+                }
+            }
+              return options;
+        }
+        
+        static async Task StartRelay(string[] args)
+        {
+            var options = ParseRelayOptions(args);
+            
+            Console.WriteLine("\n=== Starting MSSQL Relay ===");
+            Console.WriteLine($"Relay Port: {options.Port}");
+            Console.WriteLine($"Bind Address: {options.BindAddress}");
+            Console.WriteLine($"Target Server: {options.ServerHost}:{options.ServerPort}");
+            Console.WriteLine($"Verbose: {options.Verbose}");
+            Console.WriteLine($"Debug: {options.Debug}");
+            Console.WriteLine("Note: This relay transparently forwards MSSQL TDS protocol traffic");
+            Console.WriteLine("Press Ctrl+C to stop the relay\n");
+            
+            var relay = new MssqlRelay(options);
+            
+            // Handle Ctrl+C gracefully
+            Console.CancelKeyPress += (sender, e) =>
+            {
+                e.Cancel = true;
+                Console.WriteLine("\nShutting down relay...");
+                relay.Stop();
+            };
+            
+            await relay.StartAsync();
+        }
+        
+        static RelayOptions ParseRelayOptions(string[] args)
+        {
+            var options = new RelayOptions();
+            
+            for (int i = 1; i < args.Length; i++)
+            {
+                switch (args[i].ToLower())
+                {
+                    case "--port":
+                    case "-p":
+                        if (i + 1 < args.Length && int.TryParse(args[i + 1], out int port))
+                        {
+                            options.Port = port;
+                            i++;
+                        }
+                        break;
+                    case "--bind":
+                        if (i + 1 < args.Length)
+                        {
+                            options.BindAddress = args[i + 1];
+                            i++;
+                        }
+                        break;
+                    case "--host":
+                    case "-h":
+                        if (i + 1 < args.Length)
+                        {
+                            options.ServerHost = args[i + 1];
+                            i++;
+                        }
+                        break;
+                    case "--server-port":
+                        if (i + 1 < args.Length && int.TryParse(args[i + 1], out int serverPort))
+                        {
+                            options.ServerPort = serverPort;
+                            i++;
+                        }
+                        break;
+                    case "--verbose":
+                    case "-v":
+                        options.Verbose = true;
+                        break;
+                    case "--debug":
+                        options.Debug = true;
                         break;
                 }
             }

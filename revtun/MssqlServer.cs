@@ -60,11 +60,10 @@ namespace RevTun
                     Console.WriteLine($"MSSQL Client connected: {clientEndpoint}");
                     
                     var clientHandler = new MssqlClientHandler(tcpClient);
-                    _connectedClients[clientEndpoint] = clientHandler;
-                      // Start proxy listener when first client connects
+                    _connectedClients[clientEndpoint] = clientHandler;                      // Start proxy listener when first client connects
                     if (_proxyListener == null && _connectedClients.Count == 1)
                     {
-                        StartProxyListener();
+                        _ = StartProxyListener();
                     }
                     
                     // Handle client in a separate task
