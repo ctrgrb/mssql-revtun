@@ -85,9 +85,9 @@ namespace RevTun
             Console.WriteLine("  --port, -p <port>          Server port (default: 1433)");
             Console.WriteLine("  --username, -u <user>      SQL username (default: sa)");
             Console.WriteLine("  --password <pass>          SQL password (default: Password123)");
-            Console.WriteLine("  --database, -d <db>        Database name (default: master)");
-            Console.WriteLine("  --auto-exit                Exit after connection test");
+            Console.WriteLine("  --database, -d <db>        Database name (default: master)");            Console.WriteLine("  --auto-exit                Exit after connection test");
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
+            Console.WriteLine("  --debug                    Enable debug output (shows all messages)");
             Console.WriteLine("  --encrypt                  Request TLS encryption");
             Console.WriteLine("  --require-encryption       Require TLS encryption (fail if not supported)");
             Console.WriteLine();
@@ -135,25 +135,28 @@ namespace RevTun
             };
             
             await server.StartAsync();
-        }
-          static async Task StartClient(string[] args)
+        }          static async Task StartClient(string[] args)
         {
             var options = ParseClientOptions(args);
             
-            Console.WriteLine("\n=== Starting MSSQL Client ===");
-            Console.WriteLine($"Server: {options.Host}:{options.Port}");
-            Console.WriteLine($"Username: {options.Username}");
-            Console.WriteLine($"Database: {options.Database}");
-            Console.WriteLine($"Auto Exit: {options.AutoExit}");
-            Console.WriteLine($"Verbose: {options.Verbose}");
-            Console.WriteLine($"Request Encryption: {(options.RequestEncryption ? "Yes" : "No")}");
-            Console.WriteLine($"Require Encryption: {(options.RequireEncryption ? "Yes" : "No")}");
-            Console.WriteLine("Note: This client will establish a reverse tunnel\n");
+            if (options.Debug)
+            {
+                Console.WriteLine("\n=== Starting MSSQL Client ===");
+                Console.WriteLine($"Server: {options.Host}:{options.Port}");
+                Console.WriteLine($"Username: {options.Username}");
+                Console.WriteLine($"Database: {options.Database}");
+                Console.WriteLine($"Auto Exit: {options.AutoExit}");
+                Console.WriteLine($"Verbose: {options.Verbose}");
+                Console.WriteLine($"Debug: {options.Debug}");
+                Console.WriteLine($"Request Encryption: {(options.RequestEncryption ? "Yes" : "No")}");
+                Console.WriteLine($"Require Encryption: {(options.RequireEncryption ? "Yes" : "No")}");
+                Console.WriteLine("Note: This client will establish a reverse tunnel\n");
+            }
             
             var client = new MssqlClient(options);
             await client.ConnectAsync();
             
-            if (!options.AutoExit)
+            if (!options.AutoExit && options.Debug)
             {
                 Console.WriteLine("\nClient session ended. Press any key to exit...");
                 Console.ReadKey();
@@ -255,10 +258,12 @@ namespace RevTun
                         break;
                     case "--auto-exit":
                         options.AutoExit = true;
-                        break;
-                    case "--verbose":
+                        break;                    case "--verbose":
                     case "-v":
                         options.Verbose = true;
+                        break;                    case "--debug":
+                        options.Debug = true;
+                        options.Verbose = true; // Debug mode implies verbose mode
                         break;
                     case "--encrypt":
                         options.RequestEncryption = true;
@@ -281,8 +286,7 @@ namespace RevTun
         public bool Verbose { get; set; } = false;
         public bool RequireEncryption { get; set; } = false;
         public bool SupportEncryption { get; set; } = true;
-    }
-      public class ClientOptions
+    }    public class ClientOptions
     {
         public string Host { get; set; } = "localhost";
         public int Port { get; set; } = 1433;
@@ -291,6 +295,7 @@ namespace RevTun
         public string Database { get; set; } = "master";
         public bool AutoExit { get; set; } = false;
         public bool Verbose { get; set; } = false;
+        public bool Debug { get; set; } = false;
         public bool RequestEncryption { get; set; } = false;
         public bool RequireEncryption { get; set; } = false;
     }

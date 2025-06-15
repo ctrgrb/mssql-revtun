@@ -20,14 +20,16 @@ namespace RevTun
         {
             try
             {
-                Console.WriteLine($"Connecting to MSSQL Server at {_options.Host}:{_options.Port}...");
+                if (_options.Debug)
+                    Console.WriteLine($"Connecting to MSSQL Server at {_options.Host}:{_options.Port}...");
                 
                 _client = new TcpClient();
                 await _client.ConnectAsync(_options.Host, _options.Port);
                 _stream = _client.GetStream();
                 _isConnected = true;
                 
-                Console.WriteLine("Connected to server!");
+                if (_options.Debug)
+                    Console.WriteLine("Connected to server!");
                 
                 // Perform TDS handshake
                 await PerformHandshake();
@@ -35,20 +37,28 @@ namespace RevTun
                 // Start background task to handle tunnel messages
                 _ = Task.Run(HandleTunnelMessages);
                 
-                // Start interactive session
+                // Keep connection alive - no interactive session
                 if (!_options.AutoExit)
                 {
-                    await StartInteractiveSession();
+                    if (_options.Debug)
+                        Console.WriteLine("Tunnel established. Press Ctrl+C to exit.");
+                    
+                    // Keep running until interrupted
+                    while (_isConnected)
+                    {
+                        await Task.Delay(1000);
+                    }
                 }
                 else
                 {
-                    Console.WriteLine("Auto-exit mode: Connection test completed successfully.");
+                    if (_options.Debug)
+                        Console.WriteLine("Auto-exit mode: Connection test completed successfully.");
                     // Wait a bit to ensure tunnel is established
                     await Task.Delay(2000);
                 }
-            }
-            catch (Exception ex)
+            }            catch (Exception ex)
             {
+                // Always show connection errors, even in silent mode
                 Console.WriteLine($"Connection error: {ex.Message}");
             }
             finally
@@ -93,32 +103,37 @@ namespace RevTun
                             case TunnelProtocol.TUNNEL_DISCONNECT:
                                 await HandleTunnelDisconnect(packet);
                                 break;
-                                
-                            case TdsProtocol.TABULAR_RESULT:
+                                  case TdsProtocol.TABULAR_RESULT:
                                 // Regular SQL response
-                                Console.WriteLine("Query executed successfully!");
-                                LogTdsPacket(packet, "RECEIVED");
-                                ParseTabularResult(packet);
+                                if (_options.Debug)
+                                {
+                                    Console.WriteLine("Query executed successfully!");
+                                    LogTdsPacket(packet, "RECEIVED");
+                                    ParseTabularResult(packet);
+                                }
                                 break;
                                 
                             default:
-                                Console.WriteLine($"Received TDS message type: 0x{header.Type:X2}");
-                                LogTdsPacket(packet, "RECEIVED");
+                                if (_options.Debug)
+                                {
+                                    Console.WriteLine($"Received TDS message type: 0x{header.Type:X2}");
+                                    LogTdsPacket(packet, "RECEIVED");
+                                }
                                 break;
                         }
                     }
-                }
-            }
+                }            }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling tunnel messages: {ex.Message}");
+                if (_options.Debug)
+                    Console.WriteLine($"Error handling tunnel messages: {ex.Message}");
             }
         }        private async Task HandleTunnelConnect(byte[] data)
-        {
-            try
+        {            try
             {
                 var (connectionId, host, port) = TunnelProtocol.ParseTunnelConnectPacket(data);
-                Console.WriteLine($"Tunnel connect request: {connectionId} -> {host}:{port}");
+                if (_options.Debug)
+                    Console.WriteLine($"Tunnel connect request: {connectionId} -> {host}:{port}");
                 
                 var targetClient = new TcpClient();
                 bool connected = false;
@@ -139,11 +154,11 @@ namespace RevTun
                     // Optimize socket buffers for high throughput
                     socket.ReceiveBufferSize = 65536; // 64KB for better throughput
                     socket.SendBufferSize = 65536; // 64KB for better throughput
-                    
-                    connected = true;
+                      connected = true;
                     _tunnelConnections[connectionId] = targetClient;
                     
-                    Console.WriteLine($"Successfully connected to {host}:{port} for tunnel {connectionId}");
+                    if (_options.Debug)
+                        Console.WriteLine($"Successfully connected to {host}:{port} for tunnel {connectionId}");
                     
                     // Start forwarding data from target back to server
                     _ = Task.Run(() => ForwardTunnelData(connectionId, targetClient));
@@ -151,21 +166,23 @@ namespace RevTun
                 catch (Exception ex)
                 {
                     errorMessage = ex.Message;
-                    Console.WriteLine($"Failed to connect to {host}:{port}: {ex.Message}");
+                    if (_options.Debug)
+                        Console.WriteLine($"Failed to connect to {host}:{port}: {ex.Message}");
                     targetClient.Close();
                 }
                 
                 // Send acknowledgment back to server
-                var ackPacket = TunnelProtocol.CreateTunnelConnectAckPacket(connectionId, connected, errorMessage);
-                if (_stream != null)
+                var ackPacket = TunnelProtocol.CreateTunnelConnectAckPacket(connectionId, connected, errorMessage);                if (_stream != null)
                 {
                     await _stream.WriteAsync(ackPacket, 0, ackPacket.Length);
-                    LogTdsPacket(ackPacket, "SENT TUNNEL ACK");
+                    if (_options.Debug)
+                        LogTdsPacket(ackPacket, "SENT TUNNEL ACK");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling tunnel connect: {ex.Message}");
+                if (_options.Debug)
+                    Console.WriteLine($"Error handling tunnel connect: {ex.Message}");
             }
         }        private async Task HandleTunnelData(byte[] data)
         {
@@ -184,15 +201,16 @@ namespace RevTun
                     {
                         Console.WriteLine($"Forwarded {tunnelData.Length} bytes to target for connection {connectionId}");
                     }
-                }
-                else
+                }                else
                 {
-                    Console.WriteLine($"Tunnel data received for unknown/closed connection {connectionId}");
+                    if (_options.Debug)
+                        Console.WriteLine($"Tunnel data received for unknown/closed connection {connectionId}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling tunnel data: {ex.Message}");
+                if (_options.Debug)
+                    Console.WriteLine($"Error handling tunnel data: {ex.Message}");
             }
         }        private Task HandleTunnelDisconnect(byte[] data)
         {
@@ -210,11 +228,11 @@ namespace RevTun
                     {
                         Console.WriteLine($"Tunnel connection {connectionId} disconnected");
                     }
-                }
-            }
+                }            }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling tunnel disconnect: {ex.Message}");
+                if (_options.Debug)
+                    Console.WriteLine($"Error handling tunnel disconnect: {ex.Message}");
             }
             return Task.CompletedTask;
         }        private async Task ForwardTunnelData(uint connectionId, TcpClient targetClient)
@@ -230,11 +248,10 @@ namespace RevTun
                 
                 while (targetClient.Connected && _isConnected)
                 {
-                    var bytesRead = await targetStream.ReadAsync(buffer, 0, buffer.Length);
-                    if (bytesRead == 0)
+                    var bytesRead = await targetStream.ReadAsync(buffer, 0, buffer.Length);                    if (bytesRead == 0)
                     {
                         // Connection closed by remote
-                        if (_options.Verbose)
+                        if (_options.Debug)
                         {
                             Console.WriteLine($"Target connection {connectionId} closed by remote");
                         }
@@ -252,11 +269,11 @@ namespace RevTun
                         
                         if (_stream != null)
                         {
-                            await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
-                        }
+                            await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);                        }
                         else
                         {
-                            Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
+                            if (_options.Debug)
+                                Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
                             break;
                         }
                     }
@@ -275,41 +292,43 @@ namespace RevTun
                             var tunnelDataPacket = TunnelProtocol.CreateTunnelDataPacket(connectionId, chunk);
                             if (_stream != null)
                             {
-                                await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);
-                            }
+                                await _stream.WriteAsync(tunnelDataPacket, 0, tunnelDataPacket.Length);                            }
                             else
                             {
-                                Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
+                                if (_options.Debug)
+                                    Console.WriteLine($"Main MSSQL connection lost, closing tunnel {connectionId}");
                                 return;
                             }
                         }
-                    }
-                      if (_options.Verbose)
+                    }                      if (_options.Debug)
                     {
                         Console.WriteLine($"Sent {bytesRead} bytes back through tunnel {connectionId}");
                     }
                 }
-            }
-            catch (System.IO.IOException ioEx) when (ioEx.InnerException is SocketException sockEx)
+            }            catch (System.IO.IOException ioEx) when (ioEx.InnerException is SocketException sockEx)
             {
                 // Handle specific socket errors
                 if (sockEx.SocketErrorCode == SocketError.ConnectionAborted || 
                     sockEx.SocketErrorCode == SocketError.ConnectionReset)
                 {
-                    Console.WriteLine($"Target connection {connectionId} reset by peer");
+                    if (_options.Debug)
+                        Console.WriteLine($"Target connection {connectionId} reset by peer");
                 }
                 else
                 {
-                    Console.WriteLine($"Socket error for connection {connectionId}: {sockEx.SocketErrorCode} - {sockEx.Message}");
+                    if (_options.Debug)
+                        Console.WriteLine($"Socket error for connection {connectionId}: {sockEx.SocketErrorCode} - {sockEx.Message}");
                 }
             }
             catch (ObjectDisposedException)
             {
-                Console.WriteLine($"Connection {connectionId} was disposed");
+                if (_options.Debug)
+                    Console.WriteLine($"Connection {connectionId} was disposed");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error forwarding tunnel data for connection {connectionId}: {ex.Message}");
+                if (_options.Debug)
+                    Console.WriteLine($"Error forwarding tunnel data for connection {connectionId}: {ex.Message}");
             }
             finally
             {
@@ -446,14 +465,16 @@ namespace RevTun
             
             // Receive Login response
             response = await ReceiveTdsPacket();
-            if (response != null)
-            {
+            if (response != null)            {
                 if (_options.Verbose)
                 {
                     Console.WriteLine("Received Login response");
                     LogTdsPacket(response, "RECEIVED");
                 }
-                Console.WriteLine($"Login successful! Tunnel is now active. {(useEncryption ? "(Encrypted)" : "(Plaintext)")}");
+                if (_options.Debug)
+                {
+                    Console.WriteLine($"Login successful! Tunnel is now active. {(useEncryption ? "(Encrypted)" : "(Plaintext)")}");
+                }
             }
         }
           private async Task StartInteractiveSession()
@@ -569,10 +590,10 @@ namespace RevTun
                 }
                 
                 return fullPacket;
-            }
-            catch (Exception ex)
+            }            catch (Exception ex)
             {
-                Console.WriteLine($"Error receiving packet: {ex.Message}");
+                if (_options.Debug)
+                    Console.WriteLine($"Error receiving packet: {ex.Message}");
                 return null;
             }
         }
