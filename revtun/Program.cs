@@ -45,7 +45,6 @@ namespace RevTun
         
         static void PrintUsage()
         {
-            MssqlTrafficUtils.PrintWelcomeMessage();
             Console.WriteLine("Usage: revtun [command] [options]");
             Console.WriteLine();            Console.WriteLine("Commands:");
             Console.WriteLine("  server, s      Start MSSQL server (listens on port 1433)");
@@ -56,8 +55,8 @@ namespace RevTun
             Console.WriteLine("  revtun server");
             Console.WriteLine("  revtun client");
             Console.WriteLine("  revtun relay --host server.example.com");
-            Console.WriteLine("  revtun server --port 1433 --proxy-port 1080");
-            Console.WriteLine("  revtun client --host localhost --port 1433");
+            Console.WriteLine("  revtun server --port 1433 --proxy-port 1080 --password testpass");
+            Console.WriteLine("  revtun client --host localhost --port 1433 --password testpass");
             Console.WriteLine();
             Console.WriteLine("Use 'revtun help' for detailed options.");
         }
@@ -67,6 +66,7 @@ namespace RevTun
             Console.WriteLine("==============================");
             Console.WriteLine();
             Console.WriteLine("SERVER OPTIONS:");
+            Console.WriteLine("  --password <pass>          Password for authentication (REQUIRED)");
             Console.WriteLine("  --port, -p <port>          MSSQL server port (default: 1433)");
             Console.WriteLine("  --proxy-port <port>        Proxy listener port (default: 1080)");
             Console.WriteLine("  --bind <address>           Bind address (default: 0.0.0.0)");
@@ -74,10 +74,10 @@ namespace RevTun
             Console.WriteLine("  --require-encryption       Require TLS encryption for all connections");
             Console.WriteLine("  --no-encryption            Disable TLS encryption support");
             Console.WriteLine();            Console.WriteLine("CLIENT OPTIONS:");
+            Console.WriteLine("  --password <pass>          Password for authentication (REQUIRED)");
             Console.WriteLine("  --host, -h <hostname>      Server hostname (default: localhost)");
             Console.WriteLine("  --port, -p <port>          Server port (default: 1433)");
             Console.WriteLine("  --username, -u <user>      SQL username (default: sa)");
-            Console.WriteLine("  --password <pass>          Password for authentication (REQUIRED)");
             Console.WriteLine("  --database, -d <db>        Database name (default: master)");            Console.WriteLine("  --auto-exit                Exit after connection test");
             Console.WriteLine("  --verbose, -v              Enable verbose logging");
             Console.WriteLine("  --debug                    Enable debug output (shows all messages)");
@@ -94,27 +94,14 @@ namespace RevTun
             Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
             Console.WriteLine("  # Start server on custom port");
-            Console.WriteLine("  revtun server --port 1435 --proxy-port 8080");
+            Console.WriteLine("  revtun server --port 1435 --proxy-port 8080 --password testpass");
             Console.WriteLine();
             Console.WriteLine("  # Connect client to remote server");
-            Console.WriteLine("  revtun client --host 192.168.1.100 --port 1433");
-            Console.WriteLine();
-            Console.WriteLine("  # Server with verbose logging");
-            Console.WriteLine("  revtun server --verbose");
-            Console.WriteLine();
-            Console.WriteLine("  # Client with TLS encryption");
-            Console.WriteLine("  revtun client --encrypt --host server.example.com");
-            Console.WriteLine();
-            Console.WriteLine("  # Server requiring encryption");
-            Console.WriteLine("  revtun server --require-encryption");
-            Console.WriteLine();            Console.WriteLine("  # Client with custom credentials");
-            Console.WriteLine("  revtun client --username admin --password secret --database mydb");
+            Console.WriteLine("  revtun client --host 192.168.1.100 --port 1433 --password testpass");
             Console.WriteLine();
             Console.WriteLine("  # Start relay forwarding to remote server");
             Console.WriteLine("  revtun relay --host 192.168.1.100 --server-port 1433");
             Console.WriteLine();
-            Console.WriteLine("  # Relay with verbose logging on custom port");
-            Console.WriteLine("  revtun relay --port 1435 --host server.example.com --verbose");
         }        static async Task StartServer(string[] args)
         {
             var options = ParseServerOptions(args);
